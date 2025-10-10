@@ -1,0 +1,29 @@
+{
+  "id": "glue.diff-to-cli",
+  "version": "0.1.0",
+  "summary": "Adapter DiffPort \u2192 CliRenderPort (placeholder)",
+  "provides": [
+    "AdapterPort@1"
+  ],
+  "requires": [
+    "DiffPort@1",
+    "CliRenderPort@1"
+  ],
+  "inputs": {},
+  "outputs": {},
+  "side_effects": [],
+  "invariants": [
+    "no business logic; adapter only"
+  ],
+  "tests": [
+    "tests/spec_adapter.json"
+  ],
+  "evidence": [
+    {
+      "kind": "file",
+      "file": "README.md",
+      "lines": "1-20",
+      "note": "placeholder"
+    }
+  ]
+}

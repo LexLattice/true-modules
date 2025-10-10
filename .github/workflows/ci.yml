@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install JS deps
+        run: npm ci
+
+      - name: Compile schemas
+        run: npm run schema:compile
+
+      - name: Run compose on examples
+        run: npm run compose
+
+      - name: Gates (shipping) on examples
+        run: node tm.mjs gates shipping --compose ./examples/compose.json --modules-root ./examples/modules
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo check (ports/composer)
+        run: |
+          cd runtimes/rust/ports && cargo check
+          cd ../composer && cargo check

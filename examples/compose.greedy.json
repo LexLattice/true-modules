@@ -1,0 +1,27 @@
+{
+  "run_id": "2025-10-10T15:35:43.158Z",
+  "modules": [
+    {
+      "id": "worktree.manager",
+      "version": "0.1.0"
+    },
+    {
+      "id": "git.diff.core",
+      "version": "0.1.0"
+    },
+    {
+      "id": "git.index.controller",
+      "version": "0.1.0"
+    },
+    {
+      "id": "safety.validation",
+      "version": "0.1.0"
+    }
+  ],
+  "wiring": [],
+  "glue": [],
+  "constraints": [
+    "no-cross-imports",
+    "ports-only-coupling"
+  ]
+}

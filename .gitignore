@@ -1,0 +1,16 @@
+# Node
+node_modules
+npm-debug.log*
+pnpm-lock.yaml
+yarn.lock
+dist
+
+# Rust
+target
+**/*.rs.bk
+
+# Misc
+.DS_Store
+.idea
+.vscode
+.env

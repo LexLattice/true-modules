@@ -1,0 +1,27 @@
+{
+  "id": "safety.validation",
+  "version": "0.1.0",
+  "summary": "Path normalization and platform quirks (example)",
+  "provides": [
+    "SafetyPort@1"
+  ],
+  "requires": [],
+  "inputs": {},
+  "outputs": {},
+  "side_effects": [],
+  "invariants": [
+    "no network",
+    "no external processes"
+  ],
+  "tests": [
+    "tests/spec_paths.json"
+  ],
+  "evidence": [
+    {
+      "kind": "file",
+      "file": "src/lib.rs",
+      "lines": "1-30",
+      "note": "example placeholder"
+    }
+  ]
+}

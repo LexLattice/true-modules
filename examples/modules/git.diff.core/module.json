@@ -1,0 +1,33 @@
+{
+  "id": "git.diff.core",
+  "version": "0.1.0",
+  "summary": "Unified tracked/untracked diff with --no-index fallback (example)",
+  "provides": [
+    "DiffPort@1"
+  ],
+  "requires": [
+    "SafetyPort@1"
+  ],
+  "inputs": {},
+  "outputs": {},
+  "side_effects": [
+    "Process:git",
+    "FS:read"
+  ],
+  "invariants": [
+    "deterministic(outputs | inputs)",
+    "conserves: no write outside worktree"
+  ],
+  "tests": [
+    "tests/spec_diff_tracked.json",
+    "tests/spec_diff_untracked.json"
+  ],
+  "evidence": [
+    {
+      "kind": "file",
+      "file": "src/lib.rs",
+      "lines": "1-40",
+      "note": "example placeholder"
+    }
+  ]
+}
