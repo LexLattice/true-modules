@@ -4,6 +4,11 @@ npm-debug.log*
 pnpm-lock.yaml
 yarn.lock
 dist
+examples/winner/modules
+examples/winner/glue
+examples/winner/package.json
+examples/winner/ports.map.json
+examples/winner/tsconfig.json
 
 # Rust
 target

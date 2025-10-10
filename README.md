@@ -33,6 +33,13 @@ node tm.mjs compose --compose ./examples/compose.json --modules-root ./examples/
 # Conceptual/Shipping gates (light checks + cross-import lint)
 node tm.mjs gates conceptual --compose ./examples/compose.json --modules-root ./examples/modules
 node tm.mjs gates shipping   --compose ./examples/compose.json --modules-root ./examples/modules
+
+# Emit BO4 events + hook summary
+node tm.mjs gates shipping \
+  --compose ./examples/compose.json \
+  --modules-root ./examples/modules \
+  --emit-events \
+  --hook-cmd "node scripts/echo-hook.mjs"
 ```
 
 > **Note:** This is a scaffold: the CLI enforces schemas and basic wiring checks; it does not build or link code. The full Composer, Meta solver, and multi-runtime ports live in `/runtimes` as you evolve them.
@@ -42,6 +49,13 @@ node tm.mjs gates shipping   --compose ./examples/compose.json --modules-root ./
 ```bash
 node tm.mjs module --new safety.validation
 # creates ./modules/safety.validation with module.json, src/, tests/
+
+# Materialize winner workspace
+node runtimes/ts/composer/index.mjs \
+  --compose ./examples/compose.json \
+  --modules-root ./examples/modules \
+  --glue-root ./glue-catalog \
+  --out ./examples/winner
 ```
 
 See **[End-to-end swimlane](docs/swimlane.md)** for BO4 roles & hand-offs.

@@ -18,3 +18,4 @@
 
 - Author or auto-generate `compose.json` (see `/spec/compose.schema.json`).
 - Use `tm compose` to validate and emit a scaffold winner report.
+- Materialize the workspace: `node runtimes/ts/composer/index.mjs --compose ./compose.json --modules-root ./modules --out ./winner`.

@@ -85,6 +85,33 @@ function verifyPortRequires(compose, manifestsById) {
   return problems;
 }
 
+function createEventEmitter(enabled) {
+  if (!enabled) return () => {};
+  return (payload) => {
+    try {
+      process.stdout.write(JSON.stringify(payload) + '\n');
+    } catch (err) {
+      console.error('tm event emit error:', err.message);
+    }
+  };
+}
+
+async function runHookCommand(cmd, summary) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, {
+      shell: true,
+      stdio: ['pipe', 'inherit', 'inherit']
+    });
+    child.on('error', reject);
+    child.on('exit', code => {
+      if (code === 0) resolve();
+      else reject(new Error(`Hook exited with code ${code}`));
+    });
+    child.stdin.write(JSON.stringify(summary));
+    child.stdin.end();
+  });
+}
+
 // ---- helpers for gates ----
 async function listFilesRec(dir, exts) {
   const out = [];
@@ -286,89 +313,178 @@ program
   .requiredOption('--compose <file>', 'Path to compose.json')
   .requiredOption('--modules-root <dir>', 'Root dir of modules')
   .option('--timeout-ms <ms>', 'Max milliseconds each module test may run (default: 60000)', '60000')
+  .option('--emit-events', 'Emit line-delimited JSON events for gates')
+  .option('--hook-cmd <cmd>', 'Shell command to receive summary JSON via stdin')
   .description('Run conceptual / shipping gates')
   .action(async (mode, opts) => {
     const compose = await validateFile('compose.schema.json', path.resolve(opts.compose));
     const modulesRoot = path.resolve(opts.modules_root || opts.modulesRoot);
     const manifests = {};
+    const emit = createEventEmitter(Boolean(opts.emitEvents));
+    const hookCmd = opts.hookCmd;
+    const gateStart = Date.now();
+    const stats = { passed: 0, failed: 0 };
+    const moduleIds = (compose.modules || []).map(m => m.id);
+    emit({
+      event: 'GATES_START',
+      mode,
+      compose: opts.compose,
+      run_id: compose.run_id || null
+    });
+    let successMessage = '';
+    let failure = null;
 
-    // Shared checks
-    for (const m of compose.modules || []) {
-      const mroot = path.join(modulesRoot, m.id);
-      const fp = path.join(mroot, 'module.json');
-      const manifest = await validateFile('module.schema.json', fp);
-      manifests[m.id] = { manifest, root: mroot };
-      if (!Array.isArray(manifest.evidence) || manifest.evidence.length === 0) {
-        throw new Error(`Gate failure: ${m.id} has no evidence bindings.`);
+    try {
+      // Shared checks
+      for (const m of compose.modules || []) {
+        const mroot = path.join(modulesRoot, m.id);
+        const fp = path.join(mroot, 'module.json');
+        const manifest = await validateFile('module.schema.json', fp);
+        manifests[m.id] = { manifest, root: mroot };
+        if (!Array.isArray(manifest.evidence) || manifest.evidence.length === 0) {
+          throw new Error(`Gate failure: ${m.id} has no evidence bindings.`);
+        }
+        if (!Array.isArray(manifest.tests) || manifest.tests.length === 0) {
+          throw new Error(`Gate failure: ${m.id} defines no tests.`);
+        }
+        if (!Array.isArray(manifest.invariants) || manifest.invariants.length === 0) {
+          throw new Error(`Gate failure: ${m.id} defines no invariants.`);
+        }
       }
-      if (!Array.isArray(manifest.tests) || manifest.tests.length === 0) {
-        throw new Error(`Gate failure: ${m.id} defines no tests.`);
+
+      // Cross-import lint
+      const lint = await crossImportLint(modulesRoot);
+      if (lint.length) {
+        const pretty = lint.map(p => `${p.file}:${p.line} — ${p.msg}`).join('\n');
+        throw new Error('Gate failure: cross-module import violations:\n' + pretty);
       }
-      if (!Array.isArray(manifest.invariants) || manifest.invariants.length === 0) {
-        throw new Error(`Gate failure: ${m.id} defines no invariants.`);
-      }
-    }
 
-    // Cross-import lint
-    const lint = await crossImportLint(modulesRoot);
-    if (lint.length) {
-      const pretty = lint.map(p => `${p.file}:${p.line} — ${p.msg}`).join('\n');
-      throw new Error('Gate failure: cross-module import violations:\n' + pretty);
-    }
+      if (mode === 'conceptual') {
+        successMessage = '✓ Conceptual gates passed.';
+      } else {
+        const timeoutMs = Number(opts.timeoutMs ?? 60_000);
+        if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+          throw new Error('Gate failure: invalid --timeout-ms value.');
+        }
 
-    if (mode === 'conceptual') {
-      console.log('✓ Conceptual gates passed.');
-      return;
-    }
+        const reqProblems = verifyPortRequires(
+          compose,
+          Object.fromEntries(Object.entries(manifests).map(([k, v]) => [k, v.manifest]))
+        );
+        if (reqProblems.length) {
+          throw new Error('Gate failure: port requirements unmet:\n' + reqProblems.join('\n'));
+        }
 
-    const timeoutMs = Number(opts.timeoutMs ?? 60_000);
-    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-      throw new Error('Gate failure: invalid --timeout-ms value.');
-    }
+        if (!(compose.wiring && compose.wiring.length) && !(compose.constraints && compose.constraints.length)) {
+          throw new Error('Gate failure: shipping mode requires non-empty wiring or constraints.');
+        }
 
-    const reqProblems = verifyPortRequires(
-      compose,
-      Object.fromEntries(Object.entries(manifests).map(([k, v]) => [k, v.manifest]))
-    );
-    if (reqProblems.length) {
-      throw new Error('Gate failure: port requirements unmet:\n' + reqProblems.join('\n'));
-    }
-
-    if (!(compose.wiring && compose.wiring.length) && !(compose.constraints && compose.constraints.length)) {
-      throw new Error('Gate failure: shipping mode requires non-empty wiring or constraints.');
-    }
-
-    let total = 0;
-    let passed = 0;
-    for (const m of compose.modules || []) {
-      const { manifest, root } = manifests[m.id];
-      for (const t of manifest.tests || []) {
-        total += 1;
-        try {
-          if (typeof t === 'string' && t.startsWith('script:')) {
-            const scriptRel = t.replace(/^script:/, '').trim();
-            if (!scriptRel) throw new Error('Script entry missing path');
-            const scriptAbs = path.join(root, scriptRel);
-            await runCmd(process.execPath, [scriptAbs], { cwd: root, timeoutMs });
-          } else if (typeof t === 'string' && t.endsWith('.json')) {
-            const runner = path.join(root, 'tests', 'runner.mjs');
-            await fs.access(runner);
-            const specPath = path.join(root, t);
-            await runCmd(
-              process.execPath,
-              [runner, '--spec', specPath, '--moduleRoot', root],
-              { cwd: root, timeoutMs }
-            );
-          } else {
-            throw new Error(`Unknown test entry: ${t}`);
+        for (const m of compose.modules || []) {
+          const { manifest, root } = manifests[m.id];
+          for (const t of manifest.tests || []) {
+            if (typeof t !== 'string') {
+              throw new Error(`Test entry for ${m.id} is not a string: ${JSON.stringify(t)}`);
+            }
+            const testStart = Date.now();
+            emit({ event: 'TEST_START', module: m.id, test: t });
+            try {
+              if (t.startsWith('script:')) {
+                const scriptRel = t.replace(/^script:/, '').trim();
+                if (!scriptRel) throw new Error('Script entry missing path');
+                const scriptAbs = path.join(root, scriptRel);
+                await runCmd(process.execPath, [scriptAbs], { cwd: root, timeoutMs });
+              } else if (t.endsWith('.json')) {
+                const runner = path.join(root, 'tests', 'runner.mjs');
+                await fs.access(runner);
+                const specPath = path.join(root, t);
+                await runCmd(
+                  process.execPath,
+                  [runner, '--spec', specPath, '--moduleRoot', root],
+                  { cwd: root, timeoutMs }
+                );
+              } else {
+                throw new Error(`Unknown test entry: ${t}`);
+              }
+              const dur = Date.now() - testStart;
+              stats.passed += 1;
+              emit({ event: 'TEST_PASS', module: m.id, test: t, dur_ms: dur });
+            } catch (e) {
+              const dur = Date.now() - testStart;
+              stats.failed += 1;
+              const errMsg = e instanceof Error ? e.message : String(e);
+              emit({
+                event: 'TEST_FAIL',
+                module: m.id,
+                test: t,
+                dur_ms: dur,
+                error: errMsg
+              });
+              throw new Error(`Test failed for ${m.id} (${t}): ${errMsg}`);
+            }
           }
-          passed += 1;
-        } catch (e) {
-          throw new Error(`Test failed for ${m.id} (${t}): ${e.message}`);
+        }
+
+        const total = stats.passed + stats.failed;
+        successMessage = `✓ Shipping tests passed (${stats.passed}/${total}).`;
+      }
+    } catch (err) {
+      failure = err instanceof Error ? err : new Error(String(err));
+    }
+
+    const durationMs = Date.now() - gateStart;
+    const summary = {
+      run_id: compose.run_id || new Date().toISOString(),
+      mode,
+      modules: moduleIds,
+      results: { passed: stats.passed, failed: stats.failed },
+      duration_ms: durationMs
+    };
+
+    if (failure) {
+      summary.error = failure.message;
+      emit({
+        event: 'GATES_FAIL',
+        mode,
+        error: failure.message,
+        passed: stats.passed,
+        failed: stats.failed
+      });
+    } else {
+      emit({
+        event: 'GATES_PASS',
+        mode,
+        passed: stats.passed,
+        failed: stats.failed
+      });
+    }
+
+    if (hookCmd) {
+      try {
+        await runHookCommand(hookCmd, summary);
+      } catch (hookErr) {
+        const hookError = hookErr instanceof Error ? hookErr : new Error(String(hookErr));
+        if (!failure) {
+          failure = hookError;
+          emit({
+            event: 'GATES_FAIL',
+            mode,
+            error: hookError.message,
+            passed: stats.passed,
+            failed: stats.failed
+          });
+        } else {
+          failure = new Error(`${failure.message} (hook error: ${hookError.message})`);
         }
       }
     }
-    console.log(`✓ Shipping tests passed (${passed}/${total}).`);
+
+    if (!failure && successMessage) {
+      console.log(successMessage);
+    }
+
+    if (failure) {
+      throw failure;
+    }
   });
 
 program

@@ -24,8 +24,14 @@ jobs:
       - name: Run compose on examples
         run: npm run compose
 
-      - name: Gates (shipping) on examples
+      - name: Compose examples → winner workspace
+        run: node runtimes/ts/composer/index.mjs --compose ./examples/compose.json --modules-root ./examples/modules --glue-root ./glue-catalog --out ./examples/winner
+
+      - name: Gates (shipping) on modules
         run: node tm.mjs gates shipping --compose ./examples/compose.json --modules-root ./examples/modules
+
+      - name: Gates (shipping) on winner with events
+        run: node tm.mjs gates shipping --compose ./examples/compose.json --modules-root ./examples/winner/modules --emit-events --hook-cmd "node scripts/echo-hook.mjs"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
