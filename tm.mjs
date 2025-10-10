@@ -3,9 +3,11 @@ import { Command } from 'commander';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import { spawn } from 'child_process';
+import { collectCrossImportDiagnostics } from './scripts/eslint-run.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -85,31 +87,106 @@ function verifyPortRequires(compose, manifestsById) {
   return problems;
 }
 
-function createEventEmitter(enabled) {
-  if (!enabled) return () => {};
-  return (payload) => {
-    try {
-      process.stdout.write(JSON.stringify(payload) + '\n');
-    } catch (err) {
-      console.error('tm event emit error:', err.message);
+function makeEventEmitter(opts) {
+  const emit = (type, payload = {}) => {
+    if (opts.emitEvents) {
+      const evt = { event: type, ts: new Date().toISOString(), ...payload };
+      process.stdout.write(JSON.stringify(evt) + '\n');
     }
   };
+  const info = (msg) => {
+    (opts.emitEvents ? console.error : console.log)(msg);
+  };
+  return { emit, info };
 }
 
-async function runHookCommand(cmd, summary) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(cmd, {
-      shell: true,
-      stdio: ['pipe', 'inherit', 'inherit']
-    });
-    child.on('error', reject);
-    child.on('exit', code => {
-      if (code === 0) resolve();
-      else reject(new Error(`Hook exited with code ${code}`));
-    });
-    child.stdin.write(JSON.stringify(summary));
-    child.stdin.end();
-  });
+function interfaceNameForPort(portId) {
+  const [name, versionRaw] = (portId || '').split('@');
+  const version = Number(versionRaw || '1');
+  if (!version || version === 1) return name;
+  return `${name}V${version}`;
+}
+
+async function resolvePortsDir(workspaceRoot) {
+  const candidates = [
+    path.resolve(workspaceRoot, '..', 'runtimes', 'ts', 'ports'),
+    path.resolve(workspaceRoot, '..', '..', 'runtimes', 'ts', 'ports'),
+    path.resolve(process.cwd(), 'runtimes', 'ts', 'ports')
+  ];
+  for (const candidate of candidates) {
+    try {
+      const stat = await fs.stat(candidate);
+      if (stat.isDirectory()) return candidate;
+    } catch {
+      continue;
+    }
+  }
+  return path.resolve(process.cwd(), 'runtimes', 'ts', 'ports');
+}
+
+async function buildPortHarness(manifests, workspaceRoot, portsDir, ee) {
+  const entries = [];
+  let harnessDir = null;
+
+  async function ensureHarnessDir() {
+    if (!harnessDir) {
+      harnessDir = path.join(workspaceRoot, '.tm', 'port-checks');
+      await fs.rm(harnessDir, { recursive: true, force: true }).catch(() => {});
+      await fs.mkdir(harnessDir, { recursive: true });
+    }
+  }
+
+  for (const [moduleId, data] of Object.entries(manifests)) {
+    const { manifest, root } = data;
+    const provides = manifest.provides || [];
+    const portExports = manifest.port_exports || {};
+    for (const port of provides) {
+      ee.emit('PORT_CHECK_START', { module: moduleId, port });
+      let binding = portExports[port];
+      if (!binding) {
+        const fallback = 'src/index.ts';
+        try {
+          await fs.access(path.join(root, fallback));
+          binding = { file: fallback, export: 'default' };
+          ee.emit('GATES_WARN', { warn: 'port_exports_missing', module: moduleId, port });
+        } catch {
+          ee.emit('PORT_CHECK_FAIL', { module: moduleId, port, error: 'port_export_not_found' });
+          throw new Error(`Port ${port} for ${moduleId} missing port_exports entry and fallback ${fallback} not found.`);
+        }
+      }
+
+      const absFile = path.join(root, binding.file);
+      try {
+        await fs.access(absFile);
+      } catch {
+        ee.emit('PORT_CHECK_FAIL', { module: moduleId, port, error: 'port_export_not_found' });
+        throw new Error(`Port ${port} for ${moduleId} references missing file ${binding.file}`);
+      }
+
+      await ensureHarnessDir();
+      const safeModule = moduleId.replace(/[\\/]/g, '_');
+      const safePort = port.replace(/[\\/]/g, '_');
+      const harnessPath = path.join(harnessDir, `${safeModule}__${safePort}.ts`);
+
+      const relativeImport = path.relative(harnessDir, absFile).replace(/\\/g, '/');
+      const importSpecifier = relativeImport.startsWith('.') ? relativeImport : `./${relativeImport}`;
+      const portsImportRelative = path.relative(harnessDir, path.join(portsDir, 'index.js')).replace(/\\/g, '/');
+      const portsImport = portsImportRelative.startsWith('.') ? portsImportRelative : `./${portsImportRelative}`;
+      const interfaceName = interfaceNameForPort(port);
+      let importLines;
+      let reference = 'portExport';
+      if ((binding.export || '').toLowerCase() === 'default') {
+        importLines = `import provider from '${importSpecifier}';\nconst ${reference} = provider;`;
+      } else {
+        importLines = `import { ${binding.export} as ${reference} } from '${importSpecifier}';`;
+      }
+      const harnessCode = `import type { ${interfaceName} } from '${portsImport}';\n${importLines}\nconst _check: ${interfaceName} = ${reference};\nexport {};\n`;
+      await fs.writeFile(harnessPath, harnessCode);
+      entries.push({ harnessPath, module: moduleId, port });
+    }
+  }
+
+  return { harnessDir, entries };
 }
 
 // ---- helpers for gates ----
@@ -312,27 +389,25 @@ program
   .argument('<mode>', 'conceptual|shipping')
   .requiredOption('--compose <file>', 'Path to compose.json')
   .requiredOption('--modules-root <dir>', 'Root dir of modules')
-  .option('--timeout-ms <ms>', 'Max milliseconds each module test may run (default: 60000)', '60000')
-  .option('--emit-events', 'Emit line-delimited JSON events for gates')
-  .option('--hook-cmd <cmd>', 'Shell command to receive summary JSON via stdin')
+  .option('--emit-events', 'Emit line-delimited JSON events', false)
+  .option('--hook-cmd <cmd>', 'Run a hook that receives a summary JSON on stdin')
+  .option('--timeout-ms <n>', 'Per-test timeout (ms)', '60000')
   .description('Run conceptual / shipping gates')
   .action(async (mode, opts) => {
     const compose = await validateFile('compose.schema.json', path.resolve(opts.compose));
     const modulesRoot = path.resolve(opts.modules_root || opts.modulesRoot);
     const manifests = {};
-    const emit = createEventEmitter(Boolean(opts.emitEvents));
-    const hookCmd = opts.hookCmd;
+    const ee = makeEventEmitter(opts);
     const gateStart = Date.now();
-    const stats = { passed: 0, failed: 0 };
     const moduleIds = (compose.modules || []).map(m => m.id);
-    emit({
-      event: 'GATES_START',
+    const summary = {
+      run_id: compose.run_id || new Date().toISOString(),
       mode,
-      compose: opts.compose,
-      run_id: compose.run_id || null
-    });
+      modules: moduleIds,
+      results: { passed: 0, failed: 0 }
+    };
+    ee.emit('GATES_START', { mode, compose: opts.compose, run_id: compose.run_id || null });
     let successMessage = '';
-    let failure = null;
 
     try {
       // Shared checks
@@ -352,11 +427,49 @@ program
         }
       }
 
-      // Cross-import lint
-      const lint = await crossImportLint(modulesRoot);
-      if (lint.length) {
-        const pretty = lint.map(p => `${p.file}:${p.line} — ${p.msg}`).join('\n');
-        throw new Error('Gate failure: cross-module import violations:\n' + pretty);
+      // Cross-import lint (ESLint preferred, regex fallback)
+      let ranEslint = false;
+      try {
+        const { errorCount, diagnostics } = await collectCrossImportDiagnostics([modulesRoot]);
+        ranEslint = true;
+        if (errorCount > 0) {
+          const formatted = diagnostics.slice(0, 20).map(d => {
+            const rel = path.relative(process.cwd(), d.file);
+            return `${rel}:${d.line}:${d.column} ${d.message}`;
+          }).join('\n');
+          const first = diagnostics[0];
+          ee.emit('GATES_FAIL', {
+            mode,
+            error: 'lint_failed',
+            file: first ? path.relative(process.cwd(), first.file) : undefined,
+            line: first?.line,
+            message: first?.message
+          });
+          throw new Error('ESLint cross-module check failed:\n' + formatted);
+        }
+      } catch (err) {
+        if (!ranEslint && err && (err.code === 'ERR_MODULE_NOT_FOUND' || (typeof err.message === 'string' && err.message.includes("Cannot find module 'eslint'")))) {
+          ee.emit('GATES_WARN', { warn: 'eslint_unavailable' });
+          const lint = await crossImportLint(modulesRoot);
+          if (lint.length) {
+            const formatted = lint.slice(0, 20).map(entry => {
+              const rel = path.relative(process.cwd(), entry.file);
+              return `${rel}:${entry.line} ${entry.msg}`;
+            }).join('\n');
+            ee.emit('GATES_FAIL', {
+              mode,
+              error: 'lint_failed',
+              file: path.relative(process.cwd(), lint[0].file),
+              line: lint[0].line,
+              message: lint[0].msg
+            });
+            throw new Error('Cross-module import violations:\n' + formatted);
+          }
+        } else if (!ranEslint) {
+          throw err instanceof Error ? err : new Error(String(err));
+        } else {
+          throw err instanceof Error ? err : new Error(String(err));
+        }
       }
 
       if (mode === 'conceptual') {
@@ -379,14 +492,17 @@ program
           throw new Error('Gate failure: shipping mode requires non-empty wiring or constraints.');
         }
 
+        let total = 0;
+        let passed = 0;
         for (const m of compose.modules || []) {
           const { manifest, root } = manifests[m.id];
           for (const t of manifest.tests || []) {
             if (typeof t !== 'string') {
               throw new Error(`Test entry for ${m.id} is not a string: ${JSON.stringify(t)}`);
             }
+            total += 1;
             const testStart = Date.now();
-            emit({ event: 'TEST_START', module: m.id, test: t });
+            ee.emit('TEST_START', { module: m.id, test: t });
             try {
               if (t.startsWith('script:')) {
                 const scriptRel = t.replace(/^script:/, '').trim();
@@ -406,84 +522,148 @@ program
                 throw new Error(`Unknown test entry: ${t}`);
               }
               const dur = Date.now() - testStart;
-              stats.passed += 1;
-              emit({ event: 'TEST_PASS', module: m.id, test: t, dur_ms: dur });
+              passed += 1;
+              ee.emit('TEST_PASS', { module: m.id, test: t, dur_ms: dur });
             } catch (e) {
               const dur = Date.now() - testStart;
-              stats.failed += 1;
               const errMsg = e instanceof Error ? e.message : String(e);
-              emit({
-                event: 'TEST_FAIL',
-                module: m.id,
-                test: t,
-                dur_ms: dur,
-                error: errMsg
-              });
+              ee.emit('TEST_FAIL', { module: m.id, test: t, dur_ms: dur, error: errMsg });
+              summary.results = { passed, failed: total - passed };
               throw new Error(`Test failed for ${m.id} (${t}): ${errMsg}`);
             }
           }
         }
 
-        const total = stats.passed + stats.failed;
-        successMessage = `✓ Shipping tests passed (${stats.passed}/${total}).`;
-      }
-    } catch (err) {
-      failure = err instanceof Error ? err : new Error(String(err));
-    }
+        const workspaceRoot = path.resolve(modulesRoot, '..');
+        const portsDir = await resolvePortsDir(workspaceRoot);
+        const portHarness = await buildPortHarness(manifests, workspaceRoot, portsDir, ee);
+        const dirsToCheck = [modulesRoot];
+        const glueDir = path.join(workspaceRoot, 'glue');
+        try {
+          const glueStat = await fs.stat(glueDir);
+          if (glueStat.isDirectory()) dirsToCheck.push(glueDir);
+        } catch {}
 
-    const durationMs = Date.now() - gateStart;
-    const summary = {
-      run_id: compose.run_id || new Date().toISOString(),
-      mode,
-      modules: moduleIds,
-      results: { passed: stats.passed, failed: stats.failed },
-      duration_ms: durationMs
-    };
+        const includeDirs = [...dirsToCheck];
+        if (portHarness.harnessDir) includeDirs.push(portHarness.harnessDir);
+        includeDirs.push(portsDir);
 
-    if (failure) {
-      summary.error = failure.message;
-      emit({
-        event: 'GATES_FAIL',
-        mode,
-        error: failure.message,
-        passed: stats.passed,
-        failed: stats.failed
-      });
-    } else {
-      emit({
-        event: 'GATES_PASS',
-        mode,
-        passed: stats.passed,
-        failed: stats.failed
-      });
-    }
-
-    if (hookCmd) {
-      try {
-        await runHookCommand(hookCmd, summary);
-      } catch (hookErr) {
-        const hookError = hookErr instanceof Error ? hookErr : new Error(String(hookErr));
-        if (!failure) {
-          failure = hookError;
-          emit({
-            event: 'GATES_FAIL',
-            mode,
-            error: hookError.message,
-            passed: stats.passed,
-            failed: stats.failed
-          });
-        } else {
-          failure = new Error(`${failure.message} (hook error: ${hookError.message})`);
+        let tsFiles = [];
+        for (const dir of dirsToCheck) {
+          const files = await listFilesRec(dir, ['.ts', '.tsx']);
+          tsFiles = tsFiles.concat(files);
         }
+
+        const mustTypeCheck = tsFiles.length > 0 || (portHarness.entries && portHarness.entries.length > 0);
+
+        if (mustTypeCheck) {
+          const tmDir = path.join(workspaceRoot, '.tm');
+          await fs.mkdir(tmDir, { recursive: true });
+          const tscLogPath = path.join(tmDir, 'tsc.log');
+          const tsProjectPath = path.join(tmDir, 'tsconfig.json');
+          const includePaths = includeDirs.map(dir => {
+            const rel = path.relative(tmDir, dir) || '.';
+            return rel.replace(/\\/g, '/');
+          });
+          const tsConfig = {
+            compilerOptions: {
+              module: "NodeNext",
+              moduleResolution: "NodeNext",
+              target: "ES2022",
+              strict: true,
+              skipLibCheck: true,
+              allowImportingTsExtensions: true
+            },
+            include: includePaths
+          };
+          await fs.writeFile(tsProjectPath, JSON.stringify(tsConfig, null, 2));
+
+          const requireForTs = createRequire(import.meta.url);
+          let tscBin;
+          try {
+            const tsPackagePath = requireForTs.resolve('typescript/package.json');
+            const tsPackage = requireForTs(tsPackagePath);
+            const binRelative = tsPackage && tsPackage.bin && tsPackage.bin.tsc ? tsPackage.bin.tsc : 'bin/tsc';
+            tscBin = path.join(path.dirname(tsPackagePath), binRelative);
+          } catch {
+            tscBin = null;
+          }
+          if (!tscBin) {
+            throw new Error('TypeScript compiler not found. Install with `npm i -D typescript`.');
+          }
+          try {
+            await fs.access(tscBin);
+          } catch {
+            throw new Error('TypeScript compiler not found. Install with `npm i -D typescript`.');
+          }
+
+          ee.emit('TSC_START', { mode });
+          const start = Date.now();
+          const child = spawn(process.execPath, [tscBin, '--noEmit', '--project', tsProjectPath], {
+            cwd: workspaceRoot,
+            shell: false
+          });
+          let stdout = '';
+          let stderr = '';
+          child.stdout.on('data', d => { stdout += d; });
+          child.stderr.on('data', d => { stderr += d; });
+          const exitCode = await new Promise((resolve, reject) => {
+            child.on('error', reject);
+            child.on('exit', code => resolve(code));
+          });
+          const duration = Date.now() - start;
+          const combined = `${stdout}${stderr}`;
+          await fs.writeFile(tscLogPath, combined);
+          if (exitCode !== 0) {
+            const lines = combined.split(/\r?\n/).filter(Boolean).slice(0, 10);
+            ee.emit('TSC_FAIL', { mode, dur_ms: duration });
+            if (portHarness.entries?.length) {
+              const firstLine = lines[0] || '';
+              const match = portHarness.entries.find(entry => firstLine.includes(path.basename(entry.harnessPath)) || combined.includes(entry.harnessPath));
+              if (match) {
+                ee.emit('PORT_CHECK_FAIL', { module: match.module, port: match.port, error: 'port_conformance_failed' });
+              }
+            }
+            throw new Error(`TypeScript check failed:\n${lines.join('\n')}\nSee full log at ${tscLogPath}`);
+          } else {
+            ee.emit('TSC_PASS', { mode, dur_ms: duration });
+            if (portHarness.entries?.length) {
+              for (const entry of portHarness.entries) {
+                ee.emit('PORT_CHECK_PASS', { module: entry.module, port: entry.port });
+              }
+            }
+          }
+        }
+
+        summary.results = { passed, failed: 0 };
+        successMessage = `✓ Shipping tests passed (${passed}/${total}).`;
       }
-    }
+      summary.duration_ms = Date.now() - gateStart;
 
-    if (!failure && successMessage) {
-      console.log(successMessage);
-    }
+      if (opts.hookCmd) {
+        await new Promise((resolve, reject) => {
+          const child = spawn(opts.hookCmd, {
+            shell: true,
+            stdio: ['pipe', 'inherit', 'inherit']
+          });
+          child.on('error', reject);
+          child.on('exit', code => {
+            if (code === 0) resolve();
+            else reject(new Error(`Hook exited with code ${code}`));
+          });
+          child.stdin.write(JSON.stringify(summary));
+          child.stdin.end();
+        });
+      }
 
-    if (failure) {
-      throw failure;
+      ee.emit('GATES_PASS', { mode, ...summary.results });
+      if (successMessage) ee.info(successMessage);
+    } catch (err) {
+      summary.duration_ms = Date.now() - gateStart;
+      const message = err instanceof Error ? err.message : String(err);
+      summary.error = message;
+      ee.emit('GATES_FAIL', { mode, error: message, ...summary.results });
+      throw err instanceof Error ? err : new Error(message);
     }
   });
 

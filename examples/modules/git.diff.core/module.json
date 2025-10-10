@@ -22,6 +22,9 @@
     "tests/spec_diff_tracked.json",
     "tests/spec_diff_untracked.json"
   ],
+  "port_exports": {
+    "DiffPort@1": { "file": "src/index.ts", "export": "diffPort" }
+  },
   "evidence": [
     {
       "kind": "file",

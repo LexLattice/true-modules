@@ -16,6 +16,9 @@
   "tests": [
     "tests/spec_paths.json"
   ],
+  "port_exports": {
+    "SafetyPort@1": { "file": "src/index.ts", "export": "safetyPort" }
+  },
   "evidence": [
     {
       "kind": "file",
