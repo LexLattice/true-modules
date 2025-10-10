@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import { spawn } from 'child_process';
@@ -466,6 +467,8 @@ program
           }
         } else if (!ranEslint) {
           throw err instanceof Error ? err : new Error(String(err));
+        } else {
+          throw err instanceof Error ? err : new Error(String(err));
         }
       }
 
@@ -575,7 +578,19 @@ program
           };
           await fs.writeFile(tsProjectPath, JSON.stringify(tsConfig, null, 2));
 
-          const tscBin = path.join(process.cwd(), 'node_modules', '.bin', process.platform === 'win32' ? 'tsc.cmd' : 'tsc');
+          const requireForTs = createRequire(import.meta.url);
+          let tscBin;
+          try {
+            const tsPackagePath = requireForTs.resolve('typescript/package.json');
+            const tsPackage = requireForTs(tsPackagePath);
+            const binRelative = tsPackage && tsPackage.bin && tsPackage.bin.tsc ? tsPackage.bin.tsc : 'bin/tsc';
+            tscBin = path.join(path.dirname(tsPackagePath), binRelative);
+          } catch {
+            tscBin = null;
+          }
+          if (!tscBin) {
+            throw new Error('TypeScript compiler not found. Install with `npm i -D typescript`.');
+          }
           try {
             await fs.access(tscBin);
           } catch {
@@ -584,7 +599,7 @@ program
 
           ee.emit('TSC_START', { mode });
           const start = Date.now();
-          const child = spawn(tscBin, ['--noEmit', '--project', tsProjectPath], {
+          const child = spawn(process.execPath, [tscBin, '--noEmit', '--project', tsProjectPath], {
             cwd: workspaceRoot,
             shell: false
           });

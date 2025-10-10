@@ -31,55 +31,51 @@ function targetsDifferentModule(filename, specifier) {
 }
 
 module.exports = {
-  rules: {
-    'no-cross-module-imports': {
-      meta: {
-        type: 'problem',
-        docs: {
-          description: 'disallow imports that cross module boundaries',
-          recommended: false
-        },
-        schema: []
-      },
-      create(context) {
-        const filename = context.getFilename();
-        if (!filename || filename === '<text>') return {};
-        const info = findModuleInfo(filename);
-        if (!info) return {};
+  meta: {
+    type: 'problem',
+    docs: {
+      description: 'disallow imports that cross module boundaries',
+      recommended: false
+    },
+    schema: []
+  },
+  create(context) {
+    const filename = context.getFilename();
+    if (!filename || filename === '<text>') return {};
+    const info = findModuleInfo(filename);
+    if (!info) return {};
 
-        function checkLiteral(node, value) {
-          if (typeof value !== 'string') return;
-          const normalized = value.replace(/\\/g, '/');
-          if (normalized.includes('runtimes/ts/ports')) return;
-          if (value.startsWith('.')) {
-            if (resolvesOutsideModule(filename, value)) {
-              context.report({
-                node,
-                message: `Relative import "${value}" escapes module "${info.moduleId}".`
-              });
-            }
-          } else if (targetsDifferentModule(filename, value)) {
-            context.report({
-              node,
-              message: `Import "${value}" targets different module while checking "${info.moduleId}".`
-            });
-          }
+    function checkLiteral(node, value) {
+      if (typeof value !== 'string') return;
+      const normalized = value.replace(/\\/g, '/');
+      if (normalized.includes('runtimes/ts/ports')) return;
+      if (value.startsWith('.')) {
+        if (resolvesOutsideModule(filename, value)) {
+          context.report({
+            node,
+            message: `Relative import "${value}" escapes module "${info.moduleId}".`
+          });
         }
-
-        return {
-          ImportDeclaration(node) {
-            checkLiteral(node.source, node.source && node.source.value);
-          },
-          CallExpression(node) {
-            if (node.callee.type !== 'Identifier' || node.callee.name !== 'require') return;
-            if (!node.arguments.length) return;
-            const arg = node.arguments[0];
-            if (arg.type === 'Literal') {
-              checkLiteral(arg, arg.value);
-            }
-          }
-        };
+      } else if (targetsDifferentModule(filename, value)) {
+        context.report({
+          node,
+          message: `Import "${value}" targets different module while checking "${info.moduleId}".`
+        });
       }
     }
+
+    return {
+      ImportDeclaration(node) {
+        checkLiteral(node.source, node.source && node.source.value);
+      },
+      CallExpression(node) {
+        if (node.callee.type !== 'Identifier' || node.callee.name !== 'require') return;
+        if (!node.arguments.length) return;
+        const arg = node.arguments[0];
+        if (arg.type === 'Literal') {
+          checkLiteral(arg, arg.value);
+        }
+      }
+    };
   }
 };

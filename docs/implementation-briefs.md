@@ -39,18 +39,9 @@ This implementation layer translates the high-level briefs into concrete work it
 - **Objective**: replace the regex-based cross-import lint with an AST-driven ESLint rule.
 - **Key files**: `tm.mjs`, `scripts/eslint-run.mjs` (new), `.eslintrc.cjs` (new), `.eslintignore` (new), `docs/tests.md` (lint section).
 - **Implementation steps**:
-  1. **Tooling**: add `eslint@^9` (and `@typescript-eslint/parser` for TS files) to devDependencies. Surface a hint if ESLint binaries are missing.
-  2. **Config**: create `.eslintrc.cjs` with:
-     ```js
-     module.exports = {
-       root: true,
-       parserOptions: { ecmaVersion: 'latest', sourceType: 'module' },
-       overrides: [{ files: ['**/*.ts', '**/*.tsx'], parser: '@typescript-eslint/parser' }],
-       plugins: ['local-cross-import'],
-       rules: { 'local-cross-import/no-cross-module-imports': 'error' }
-     };
-     ```
-     Implement the `local-cross-import` rule inline (no external plugins). It must flag (a) relative imports escaping the module root (`../` beyond `modules/<this>`), and (b) absolute imports containing `modules/<other>`.
+  1. **Tooling**: add `eslint@^8` (and `@typescript-eslint/parser` for TS files) plus `eslint-plugin-local-rules` to devDependencies. Surface a hint if ESLint binaries are missing.
+  2. **Config**: create `.eslintrc.cjs` that registers the local rule via `eslint-plugin-local-rules` so the configuration works in CLI/IDE contexts.
+     Implement the `cross-module-imports` rule inline. It must flag (a) relative imports escaping the module root (`../` beyond `modules/<this>`), and (b) absolute imports containing `modules/<other>`.
   3. **Ignore file**: add `.eslintignore` to exclude generated artifacts (`winner/**`, `.tm/**`, etc.).
   4. **Runner**: write `scripts/eslint-run.mjs` that loads ESLint programmatically, runs against a target directory, and returns structured diagnostics. Limit to the first 20 findings. When ESLint is unavailable, emit `GATES_WARN { "warn": "eslint_unavailable" }` and fall back to the existing regex scanner.
   5. **Gates integration**: update conceptual gates in `tm.mjs` to prefer the ESLint runner. On failure emit `GATES_FAIL { "error": "lint_failed", "file": …, "line": …, "message": … }`.

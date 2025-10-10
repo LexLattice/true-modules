@@ -1,3 +1,5 @@
+const path = require('path');
+
 module.exports = {
   root: true,
   parserOptions: {
@@ -14,8 +16,13 @@ module.exports = {
       }
     }
   ],
-  plugins: ['cross-import'],
+  plugins: ['local-rules'],
   rules: {
-    'cross-import/no-cross-module-imports': 'error'
+    'local-rules/cross-module-imports': 'error'
+  },
+  settings: {
+    'local-rules': {
+      'cross-module-imports': path.resolve(__dirname, 'scripts/eslint-cross-import-rule.cjs')
+    }
   }
 };
