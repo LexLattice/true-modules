@@ -9,6 +9,7 @@ examples/winner/glue
 examples/winner/package.json
 examples/winner/ports.map.json
 examples/winner/tsconfig.json
+**/.tm/
 
 # Rust
 target

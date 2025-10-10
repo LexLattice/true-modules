@@ -44,3 +44,16 @@ process.exit(0);
 ```
 
 This simple contract keeps shipping gates portable while allowing richer module-specific assertions as your workflow evolves.
+
+## Type-checking (TypeScript)
+
+When `.ts`/`.tsx` files are present under `modules/` or `glue/`:
+
+1. Install `typescript@^5.6` locally (`npm i -D typescript`).
+2. Ensure the winner workspace has a `tsconfig.json` whose `"include"` covers only `modules` and `glue`.
+3. Fix missing typings, invalid imports, or path alias issues flagged by the compiler.
+4. Re-run shipping gates (`node tm.mjs gates shipping ... --emit-events`). On failure, inspect `winner/.tm/tsc.log` for full diagnostics (first 10 messages appear inline).
+
+## Cross-import linting
+
+Shipping relies on a local ESLint rule that forbids module-to-module imports. Install `eslint` and `@typescript-eslint/parser` in your workspace (`npm i -D eslint @typescript-eslint/parser`). `tm gates` prefers ESLint and emits `lint_failed` errors when violations occur. If ESLint is unavailable, gates fall back to the legacy regex scan and emit a warning (`eslint_unavailable`); fix the reported import path and rerun.

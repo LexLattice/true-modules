@@ -1,0 +1,4 @@
+node_modules/
+winner/**
+examples/winner/**
+.tm/**

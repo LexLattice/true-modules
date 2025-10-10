@@ -10,12 +10,14 @@
   "scripts": {
     "schema:compile": "node tm.mjs schema-compile",
     "compose": "node tm.mjs compose --compose ./examples/compose.json --modules-root ./examples/modules --out ./examples/winner",
-    "meta": "node tm.mjs meta --coverage ./examples/coverage.json --out ./examples/compose.greedy.json",
-    "module": "node tm.mjs module --new"
+    "meta": "node tm.mjs meta --coverage ./examples/coverage.json --out ./examples/compose.greedy.json"
   },
   "devDependencies": {
+    "@typescript-eslint/parser": "^7.18.0",
     "ajv": "^8.12.0",
     "ajv-formats": "^2.1.1",
-    "commander": "^11.1.0"
+    "commander": "^11.1.0",
+    "eslint": "^8.57.1",
+    "typescript": "^5.6.0"
   }
 }

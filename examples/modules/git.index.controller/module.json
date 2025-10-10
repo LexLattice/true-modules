@@ -19,6 +19,9 @@
   "tests": [
     "tests/spec_index.json"
   ],
+  "port_exports": {
+    "IndexPort@1": { "file": "src/index.ts", "export": "indexPort" }
+  },
   "evidence": [
     {
       "kind": "file",

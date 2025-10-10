@@ -83,6 +83,28 @@
         "type": "string"
       }
     },
+    "port_exports": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Za-z][A-Za-z0-9]*Port@\\d+$": {
+          "type": "object",
+          "required": [
+            "file",
+            "export"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "export": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "evidence": {
       "type": "array",
       "items": {
