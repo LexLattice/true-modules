@@ -100,3 +100,65 @@ This implementation layer translates the high-level briefs into concrete work it
 4. **CI restructuring**: split the workflow into `schemas`, `composer+gates`, and `eslint` jobs/steps. Ensure artifacts (e.g., `events.ndjson`, `tsc.log`) are collected where useful.
 
 Once these briefs are approved, dispatch C1–C3 to Codex Cloud coders as independent tasks. After each landing, rerun the full local validation sequence (compose → winner composer → conceptual/shipping gates with events and hooks).
+
+---
+
+# Implementation Briefs — Wave 2 (C4–C5)
+
+Wave 2 focuses on making composition deterministic and formalizing telemetry for downstream BO4 automation.
+
+---
+
+## C4 — Composer Duplicate-Provider Policy
+
+- **Objective**: refuse ambiguous port providers unless plans disambiguate via wiring or explicit constraints, and surface deterministic reasoning.
+- **Key files**: `runtimes/ts/composer/index.mjs`, `docs/composer.md` (new), new fixtures under `examples/dup-provider/`.
+- **Implementation steps**:
+  1. **Provider analysis**: treat provider identity as `PortName@major`. When multiple modules provide the same major, resolve using a deterministic order:
+     1. Wiring entries (`compose.wiring[]`) that select a provider win.
+     2. Constraints win next. Support string form `prefer:DiffPort@1=git.diff.core` and structured form `{ "preferred_providers": { "DiffPort@1": "git.diff.core" } }`.
+     3. If still ambiguous → error.
+  2. **Error model**: emit `E_DUP_PROVIDER` with message:
+     ```
+     Duplicate providers for DiffPort@1: git.diff.core, git.diff.alt.
+     Add wiring from orchestrator or constraint prefer:DiffPort@1=git.diff.core.
+     ```
+     When a provider is chosen (wired or preferred), log why so `composer --explain` can report deterministic reasoning.
+  3. **Edge handling**:
+     - Constraints targeting missing ports (e.g., `DiffPort@2`) must fail with `E_PREFER_UNSAT`.
+     - If a constraint resolves the port but other provider modules remain in the plan unused, emit a warning encouraging cleanup.
+     - Implement `composer --explain` that outputs stable JSON/table listing each port, chosen module, and reason (`wired`, `preferred`, `sole`).
+  4. **Docs & fixtures**: add `docs/composer.md` covering failure (no disambiguation) and fixes (wiring, `preferred_providers`). Create fixtures `examples/dup-provider/compose.fail.json` (expect `E_DUP_PROVIDER`) and `examples/dup-provider/compose.ok.json` (resolved).
+  5. **Tests/CI**: extend composer CI to run both fixtures and assert exit codes, plus surface warning/success logs in explain mode.
+- **Acceptance**:
+  - Ambiguous ports without disambiguation exit with `E_DUP_PROVIDER`.
+  - Constraints pointing at missing ports trigger `E_PREFER_UNSAT`.
+  - `--explain` produces deterministic output describing provider choices/reasons.
+  - Warning issued when unused providers remain after constraint resolution.
+
+---
+
+## C5 — Event Schema & File Sink
+
+- **Objective**: stabilize gate event contracts and support artifact capture for BO4 orchestration.
+- **Key files**: `spec/events.schema.json` (new), `tm.mjs`, `docs/events.md` (new), `.github/workflows/ci.yml`.
+- **Implementation steps**:
+  1. **Schema**: create `spec/events.schema.json` describing `tm-events@1` envelope with required fields `schema`, `event`, `ts`, `seq`, `source`, `context`, optional `detail`. Enumerate allowed event names (`GATES_*`, `TEST_*`, `TSC_*`, `LINT_*`, `PORT_CHECK_*`). Document per-event `detail` fields in `docs/events.md`.
+  2. **CLI flags/behavior**:
+     - `--emit-events` (stdout NDJSON) remains.
+     - Add `--events-out <file>`: tee events to file (append by default; add `--events-truncate` to overwrite). Auto-create directories.
+     - Add `--strict-events` (default enabled in CI) to fail fast on schema violations (emit `E_EVENT_SCHEMA`).
+     - Every emission must include `schema: "tm-events@1"`, monotonically increasing `seq`, `source: { cli: "tm", version }`, `context: { run_id, mode, compose_sha256 }`, and event-specific `detail` fields (`module`, `test`, `dur_ms`, `code`, `artifact`, etc.).
+     - Normalize error codes: e.g., `E_TSC`, `E_LINT`, `E_PORT_CONFORMANCE`, `E_HOOK`, `E_DUP_PROVIDER`, `E_REQUIRE_UNSAT`, `E_PREFER_UNSAT`, `E_EVENT_SCHEMA`.
+     - Keep stdout free of human text when emitting events; continue logging human summaries to stderr.
+  3. **Docs**: author `docs/events.md` with 3–4 sample LD-JSON lines, explaining `seq`, strict vs non-strict modes, artifact pointers, and usage (`tm gates ... --emit-events --events-out artifacts/events.ndjson --strict-events`).
+  4. **CI**: run shipping gates with `--emit-events --events-out artifacts/events.ndjson --strict-events`, validate each line against the schema (AJV or script), and upload the NDJSON artifact.
+- **Acceptance**:
+  - All events (conceptual + shipping) validate against `tm-events@1` with monotonic `seq`.
+  - `--events-out` produces a file identical to stdout stream when `--emit-events` is set.
+  - Schema violations with `--strict-events` cause an immediate failure (`E_EVENT_SCHEMA`).
+  - Event `detail` includes compose hash, durations, and artifact pointers for downstream automation.
+
+---
+
+After Wave 2 briefs are approved, hand C4–C5 to Codex Cloud coders. Post-merge, rerun the end-to-end validation (compose → winner composer → gates) and inspect the duplicate-provider and events-out scenarios to confirm behavior.
