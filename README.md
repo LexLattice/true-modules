@@ -27,18 +27,18 @@ This repo provides a minimal CLI `tm` for schema validation and a basic composit
 # Greedy meta selection (from coverage.json) → compose.json (uses risk/evidence scoring)
 node tm.mjs meta --coverage ./examples/coverage.json --out ./examples/compose.greedy.json
 
-# Compose (validate compose.json + module manifests) → winner artifacts
-node tm.mjs compose --compose ./examples/compose.json --modules-root ./examples/modules --out ./examples/winner
+# Compose (validate compose.json + module manifests) → winner artifacts + provider explain
+node tm.mjs compose --compose ./examples/compose.json --modules-root ./examples/modules --out ./examples/winner --explain
 
 # Conceptual/Shipping gates (light checks + cross-import lint)
 node tm.mjs gates conceptual --compose ./examples/compose.json --modules-root ./examples/modules
-node tm.mjs gates shipping   --compose ./examples/compose.json --modules-root ./examples/modules
-
-# Emit BO4 events + hook summary
+mkdir -p artifacts
 node tm.mjs gates shipping \
   --compose ./examples/compose.json \
   --modules-root ./examples/modules \
   --emit-events \
+  --events-out artifacts/events.ndjson \
+  --strict-events \
   --hook-cmd "node scripts/echo-hook.mjs"
 ```
 
@@ -60,6 +60,9 @@ node runtimes/ts/composer/index.mjs \
 
 See **[End-to-end swimlane](docs/swimlane.md)** for BO4 roles & hand-offs.
 Shipping test expectations live in **[docs/tests.md](docs/tests.md)**.
+Deterministic provider selection and compose diagnostics are covered in
+**[docs/composer.md](docs/composer.md)**. Event streaming semantics live in
+**[docs/events.md](docs/events.md)**.
 
 ## License
 Dual-licensed under **MIT** and **Apache-2.0**. See `LICENSE-MIT` and `LICENSE-APACHE`.

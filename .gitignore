@@ -20,3 +20,5 @@ target
 .idea
 .vscode
 .env
+artifacts/
+tmp/

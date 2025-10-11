@@ -24,6 +24,23 @@ jobs:
       - name: Run compose on examples
         run: npm run compose
 
+      - name: Composer duplicate provider failure
+        run: |
+          rm -rf ./tmp/dup-fail
+          if node tm.mjs compose --compose ./examples/dup-provider/compose.fail.json --modules-root ./examples/modules --out ./tmp/dup-fail; then
+            echo "expected tm compose to fail with E_DUP_PROVIDER" >&2
+            exit 1
+          fi
+
+      - name: Composer duplicate provider resolution
+        run: |
+          rm -rf ./examples/dup-provider/winner
+          node tm.mjs compose \
+            --compose ./examples/dup-provider/compose.ok.json \
+            --modules-root ./examples/modules \
+            --out ./examples/dup-provider/winner \
+            --explain
+
       - name: Compose examples → winner workspace
         run: node runtimes/ts/composer/index.mjs --compose ./examples/compose.json --modules-root ./examples/modules --glue-root ./glue-catalog --out ./examples/winner
 
@@ -31,7 +48,18 @@ jobs:
         run: node tm.mjs gates shipping --compose ./examples/compose.json --modules-root ./examples/modules
 
       - name: Gates (shipping) on winner with events
-        run: node tm.mjs gates shipping --compose ./examples/compose.json --modules-root ./examples/winner/modules --emit-events --hook-cmd "node scripts/echo-hook.mjs"
+        run: |
+          mkdir -p artifacts
+          node tm.mjs gates shipping \
+            --compose ./examples/compose.json \
+            --modules-root ./examples/winner/modules \
+            --emit-events \
+            --events-out artifacts/events.ndjson \
+            --strict-events \
+            --hook-cmd "node scripts/echo-hook.mjs"
+
+      - name: Validate gate events
+        run: node scripts/validate-events.mjs artifacts/events.ndjson
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
