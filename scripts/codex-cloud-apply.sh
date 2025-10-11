@@ -90,8 +90,9 @@ cmd_apply() {
     log "Creating branch $branch from $base"
     git checkout "$base"
     git checkout -b "$branch"
-    if [ -f "$outdir/patch.diff" ]; then
-      if git apply --3way "$outdir/patch.diff"; then
+    patch="$outdir/var$VAR/patch.diff"
+    if [ -f "$patch" ]; then
+      if git apply --3way "$patch"; then
         log "Applied diff for variant $VAR"
       else
         log "Failed to apply diff for variant $VAR"
@@ -105,7 +106,7 @@ cmd_apply() {
     fi
     if [ $run_tests -eq 1 ]; then
       if [ -f package.json ]; then
-        npm run --if-present test > "$outdir/test.log" 2>&1 || true
+        npm run --if-present test > "$outdir/var$VAR/test.log" 2>&1 || true
       fi
     fi
     git status -sb
