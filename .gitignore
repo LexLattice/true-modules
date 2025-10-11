@@ -20,3 +20,5 @@ target
 .idea
 .vscode
 .env
+cloud-prompt-*.md
+.codex/
