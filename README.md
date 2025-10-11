@@ -39,6 +39,9 @@ node tm.mjs gates shipping \
   --compose ./examples/compose.json \
   --modules-root ./examples/modules \
   --emit-events \
+  --events-out artifacts/events.ndjson \
+  --events-truncate \
+  --strict-events \
   --hook-cmd "node scripts/echo-hook.mjs"
 ```
 
@@ -56,6 +59,13 @@ node runtimes/ts/composer/index.mjs \
   --modules-root ./examples/modules \
   --glue-root ./glue-catalog \
   --out ./examples/winner
+# Explain provider selection
+node runtimes/ts/composer/index.mjs \
+  --compose ./examples/compose.json \
+  --modules-root ./examples/modules \
+  --glue-root ./glue-catalog \
+  --out ./examples/winner \
+  --explain > explain.json
 ```
 
 See **[End-to-end swimlane](docs/swimlane.md)** for BO4 roles & hand-offs.

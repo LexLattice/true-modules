@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BO4 Variant Self-Assessment (report.v1)",
+  "type": "object",
+  "required": [
+    "summary",
+    "checklist",
+    "architecture",
+    "tests",
+    "metrics",
+    "risks",
+    "todos"
+  ],
+  "properties": {
+    "summary": {
+      "type": "string"
+    },
+    "checklist": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "notes"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "implemented",
+              "partial",
+              "skipped",
+              "rejected"
+            ]
+          },
+          "notes": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "architecture": {
+      "type": "object",
+      "required": [
+        "components_added",
+        "components_modified",
+        "data_flow",
+        "state_management",
+        "invariants",
+        "tradeoffs"
+      ],
+      "properties": {
+        "components_added": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "path",
+              "role"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "ui",
+                  "service",
+                  "workflow",
+                  "infra",
+                  "adapter",
+                  "codec",
+                  "rule"
+                ]
+              }
+            }
+          }
+        },
+        "components_modified": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "reason"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "data_flow": {
+          "type": "string"
+        },
+        "state_management": {
+          "type": "string"
+        },
+        "invariants": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tradeoffs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "alternatives_considered": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "option",
+              "rejected_because"
+            ],
+            "properties": {
+              "option": {
+                "type": "string"
+              },
+              "rejected_because": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "open_questions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "tests": {
+      "type": "object",
+      "required": [
+        "added",
+        "how_to_run"
+      ],
+      "properties": {
+        "added": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "how_to_run": {
+          "type": "string"
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "required": [
+        "files_changed",
+        "insertions",
+        "deletions"
+      ],
+      "properties": {
+        "files_changed": {
+          "type": "number"
+        },
+        "insertions": {
+          "type": "number"
+        },
+        "deletions": {
+          "type": "number"
+        }
+      }
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "todos": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

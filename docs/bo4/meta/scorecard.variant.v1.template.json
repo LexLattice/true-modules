@@ -1,0 +1,38 @@
+{
+  "variant": "varX",
+  "facets": {
+    "architecture_clarity": {
+      "score": 0,
+      "evidence": []
+    },
+    "checklist_coverage": {
+      "score": 0,
+      "must_total": 0,
+      "must_impl": 0,
+      "evidence": []
+    },
+    "novelty": {
+      "score": 0,
+      "new_patterns": [],
+      "evidence": []
+    },
+    "coherence": {
+      "score": 0,
+      "metrics": {
+        "rep": [
+          0,
+          0,
+          0
+        ],
+        "diff": [
+          0,
+          0,
+          0
+        ]
+      },
+      "missing_paths": []
+    }
+  },
+  "overall": 0,
+  "rationale": "brief justification for the score"
+}

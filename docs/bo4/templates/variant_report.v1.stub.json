@@ -1,0 +1,48 @@
+{
+  "summary": "What you explored and how to exercise it later.",
+  "checklist": [
+    {
+      "id": "P1",
+      "status": "implemented",
+      "notes": "why and how"
+    }
+  ],
+  "architecture": {
+    "components_added": [
+      {
+        "name": "ComponentName",
+        "path": "apps/ade-tauri/src/...",
+        "role": "ui"
+      }
+    ],
+    "components_modified": [],
+    "data_flow": "Key producers/consumers introduced by this change.",
+    "state_management": "Where/how state is held and mutated.",
+    "invariants": [
+      "maintain X when Y happens"
+    ],
+    "tradeoffs": [
+      "chose virtualization over absolute measurement"
+    ],
+    "alternatives_considered": [
+      {
+        "option": "Approach A",
+        "rejected_because": "reason"
+      }
+    ],
+    "open_questions": [
+      "Should resize be debounced at source?"
+    ]
+  },
+  "tests": {
+    "added": [],
+    "how_to_run": "pnpm -F @ade/tauri-app test -- --run"
+  },
+  "metrics": {
+    "files_changed": 0,
+    "insertions": 0,
+    "deletions": 0
+  },
+  "risks": [],
+  "todos": []
+}
