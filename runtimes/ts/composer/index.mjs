@@ -3,6 +3,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+import { tmError, analyzeProviders } from '../../../scripts/lib/provider-analysis.mjs';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -52,7 +54,11 @@ function normalizePortName(entry) {
     manifById[mod.id] = await readJSON(mp);
   }
 
-  // Duplicate providers check
+  const { warnings } = analyzeProviders(compose, manifById);
+  for (const warning of warnings) {
+    console.warn(warning);
+  }
+
   const providers = {};
   for (const [id, man] of Object.entries(manifById)) {
     for (const p of (man.provides || [])) {
@@ -60,15 +66,6 @@ function normalizePortName(entry) {
       if (!providers[name]) providers[name] = [];
       providers[name].push(id);
     }
-  }
-
-  const duplicateProviders = Object.entries(providers).filter(([, ids]) => ids.length > 1);
-  const hasExplicitWiring = Array.isArray(compose.wiring) && compose.wiring.length > 0;
-  if (duplicateProviders.length && !hasExplicitWiring) {
-    const msg = duplicateProviders
-      .map(([port, ids]) => `  ${port}: ${ids.join(', ')}`)
-      .join('\n');
-    throw new Error('Multiple modules provide the same port without explicit wiring:\n' + msg);
   }
 
   // Requires check
@@ -83,7 +80,7 @@ function normalizePortName(entry) {
     }
   }
   if (reqProblems.length) {
-    throw new Error('Port requires unsatisfied:\n' + reqProblems.join('\n'));
+    throw tmError('E_REQUIRE_UNSAT', 'Port requires unsatisfied:\n' + reqProblems.join('\n'));
   }
 
   const winnerModulesDir = path.join(outDir, 'modules');

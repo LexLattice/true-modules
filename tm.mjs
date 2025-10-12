@@ -7,13 +7,16 @@ import { createRequire } from 'module';
 import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import { spawn } from 'child_process';
+import crypto from 'crypto';
 import { collectCrossImportDiagnostics } from './scripts/eslint-run.mjs';
+import { tmError, analyzeProviders } from './scripts/lib/provider-analysis.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const CLI_VERSION = '0.1.0';
 const program = new Command();
-program.name('tm').description('True Modules CLI (scaffold)').version('0.1.0');
+program.name('tm').description('True Modules CLI (scaffold)').version(CLI_VERSION);
 
 const specDir = path.join(__dirname, 'spec');
 
@@ -87,17 +90,71 @@ function verifyPortRequires(compose, manifestsById) {
   return problems;
 }
 
-function makeEventEmitter(opts) {
-  const emit = (type, payload = {}) => {
+async function makeEventEmitter(opts) {
+  const context = {
+    run_id: opts.context?.run_id ?? null,
+    mode: opts.context?.mode ?? null,
+    compose_sha256: opts.context?.compose_sha256 ?? null
+  };
+  const strict = Boolean(opts.strictEvents);
+  let validator = null;
+  if (strict) {
+    const schema = await loadJSON(path.join(specDir, 'events.schema.json'));
+    const ajv = makeAjv();
+    validator = ajv.compile(schema);
+  }
+
+  let fileHandle = null;
+  if (opts.eventsOut) {
+    const target = path.resolve(opts.eventsOut);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    fileHandle = await fs.open(target, opts.eventsTruncate ? 'w' : 'a');
+  }
+
+  let seq = 0;
+  const writeLine = async (line) => {
     if (opts.emitEvents) {
-      const evt = { event: type, ts: new Date().toISOString(), ...payload };
-      process.stdout.write(JSON.stringify(evt) + '\n');
+      process.stdout.write(line + '\n');
+    }
+    if (fileHandle) {
+      await fileHandle.appendFile(line + '\n');
     }
   };
+
+  const emit = async (event, detail = {}) => {
+    const envelope = {
+      schema: 'tm-events@1',
+      event,
+      ts: new Date().toISOString(),
+      seq: ++seq,
+      source: { cli: 'tm', version: CLI_VERSION },
+      context
+    };
+    if (detail && Object.keys(detail).length > 0) {
+      envelope.detail = detail;
+    }
+    if (validator) {
+      const valid = validator(envelope);
+      if (!valid) {
+        const errs = (validator.errors || []).map(e => `${e.instancePath} ${e.message}`).join('; ');
+        throw tmError('E_EVENT_SCHEMA', `Event ${event} failed validation: ${errs}`);
+      }
+    }
+    await writeLine(JSON.stringify(envelope));
+  };
+
   const info = (msg) => {
     (opts.emitEvents ? console.error : console.log)(msg);
   };
-  return { emit, info };
+
+  const close = async () => {
+    if (fileHandle) {
+      await fileHandle.close();
+      fileHandle = null;
+    }
+  };
+
+  return { emit, info, close };
 }
 
 function interfaceNameForPort(portId) {
@@ -141,17 +198,17 @@ async function buildPortHarness(manifests, workspaceRoot, portsDir, ee) {
     const provides = manifest.provides || [];
     const portExports = manifest.port_exports || {};
     for (const port of provides) {
-      ee.emit('PORT_CHECK_START', { module: moduleId, port });
+      await ee.emit('PORT_CHECK_START', { module: moduleId, port });
       let binding = portExports[port];
       if (!binding) {
         const fallback = 'src/index.ts';
         try {
           await fs.access(path.join(root, fallback));
           binding = { file: fallback, export: 'default' };
-          ee.emit('GATES_WARN', { warn: 'port_exports_missing', module: moduleId, port });
+          await ee.emit('GATES_WARN', { code: 'WARN_PORT_EXPORTS_MISSING', module: moduleId, port });
         } catch {
-          ee.emit('PORT_CHECK_FAIL', { module: moduleId, port, error: 'port_export_not_found' });
-          throw new Error(`Port ${port} for ${moduleId} missing port_exports entry and fallback ${fallback} not found.`);
+          await ee.emit('PORT_CHECK_FAIL', { module: moduleId, port, error: 'port_export_not_found', code: 'E_PORT_CONFORMANCE' });
+          throw tmError('E_PORT_CONFORMANCE', `Port ${port} for ${moduleId} missing port_exports entry and fallback ${fallback} not found.`);
         }
       }
 
@@ -159,8 +216,8 @@ async function buildPortHarness(manifests, workspaceRoot, portsDir, ee) {
       try {
         await fs.access(absFile);
       } catch {
-        ee.emit('PORT_CHECK_FAIL', { module: moduleId, port, error: 'port_export_not_found' });
-        throw new Error(`Port ${port} for ${moduleId} references missing file ${binding.file}`);
+        await ee.emit('PORT_CHECK_FAIL', { module: moduleId, port, error: 'port_export_not_found', code: 'E_PORT_CONFORMANCE' });
+        throw tmError('E_PORT_CONFORMANCE', `Port ${port} for ${moduleId} references missing file ${binding.file}`);
       }
 
       await ensureHarnessDir();
@@ -242,7 +299,7 @@ program
   .command('schema-compile')
   .description('Compile all JSON Schemas to ensure they are valid (AJV 2020-12)')
   .action(async () => {
-    const files = ['module.schema.json','compose.schema.json','coverage.schema.json','report.schema.json'];
+    const files = ['module.schema.json','compose.schema.json','coverage.schema.json','report.schema.json','events.schema.json'];
     for (const f of files) {
       const schema = await loadJSON(path.join(specDir, f));
       const ajv = makeAjv();
@@ -256,6 +313,7 @@ program
   .requiredOption('--compose <file>', 'Path to compose.json')
   .requiredOption('--modules-root <dir>', 'Root directory containing module folders (with module.json)')
   .option('--out <dir>', './winner', 'Output directory for winner artifacts')
+  .option('--explain', 'Print provider resolution details', false)
   .description('Validate compose plan and manifests; emit a minimal winner report (scaffold)')
   .action(async (opts) => {
     const compose = await validateFile('compose.schema.json', path.resolve(opts.compose));
@@ -275,7 +333,7 @@ program
     );
     const reqProblems = verifyPortRequires(compose, manifestsById);
     if (reqProblems.length) {
-      throw new Error('Compose port requirements failed:\n' + reqProblems.join('\n'));
+      throw tmError('E_REQUIRE_UNSAT', 'Compose port requirements failed:\n' + reqProblems.join('\n'));
     }
 
     // Basic wiring checks
@@ -288,16 +346,18 @@ program
       const [fromName, fromPort] = w.from.split(':');
       const [toName, toPort] = w.to.split(':');
       if (!fromName || !fromPort || !toName || !toPort) {
-        throw new Error(`Invalid wiring entry: ${JSON.stringify(w)}`);
+        throw tmError('E_COMPOSE', `Invalid wiring entry: ${JSON.stringify(w)}`);
       }
       if (fromName !== 'orchestrator') {
         const ent = moduleEntries[fromName];
-        if (!ent) throw new Error(`Wiring 'from' references unknown module: ${fromName}`);
+        if (!ent) throw tmError('E_COMPOSE', `Wiring 'from' references unknown module: ${fromName}`);
         if (!providesPort(ent.manifest, fromPort)) {
-          throw new Error(`Module ${fromName} does not provide port ${fromPort}`);
+          throw tmError('E_COMPOSE', `Module ${fromName} does not provide port ${fromPort}`);
         }
       }
     }
+
+    const { explanations, warnings } = analyzeProviders(compose, moduleEntries);
 
     // Emit a minimal winner report
     const outDir = path.resolve(opts.out || './winner');
@@ -322,6 +382,14 @@ program
     await fs.writeFile(path.join(outDir, 'report.json'), JSON.stringify(winnerReport, null, 2));
     await fs.writeFile(path.join(outDir, 'README.md'), '# Winner (scaffold)\n\nGenerated by `tm compose`.');
     console.log(`✓ Wrote ${path.join(outDir, 'report.json')}`);
+
+    for (const warning of warnings) {
+      console.warn(warning);
+    }
+
+    if (opts.explain) {
+      console.log(JSON.stringify(explanations, null, 2));
+    }
   });
 
 program
@@ -390,26 +458,39 @@ program
   .requiredOption('--compose <file>', 'Path to compose.json')
   .requiredOption('--modules-root <dir>', 'Root dir of modules')
   .option('--emit-events', 'Emit line-delimited JSON events', false)
+  .option('--events-out <file>', 'Write events to file (NDJSON)')
+  .option('--events-truncate', 'Truncate events output file before writing', false)
+  .option('--strict-events', 'Validate events against tm-events@1 schema (fail fast)', false)
   .option('--hook-cmd <cmd>', 'Run a hook that receives a summary JSON on stdin')
   .option('--timeout-ms <n>', 'Per-test timeout (ms)', '60000')
   .description('Run conceptual / shipping gates')
   .action(async (mode, opts) => {
-    const compose = await validateFile('compose.schema.json', path.resolve(opts.compose));
+    const composePath = path.resolve(opts.compose);
+    const compose = await validateFile('compose.schema.json', composePath);
+    const composeHash = crypto.createHash('sha256').update(await fs.readFile(composePath)).digest('hex');
     const modulesRoot = path.resolve(opts.modules_root || opts.modulesRoot);
     const manifests = {};
-    const ee = makeEventEmitter(opts);
-    const gateStart = Date.now();
+    const runId = compose.run_id || new Date().toISOString();
     const moduleIds = (compose.modules || []).map(m => m.id);
+    const ee = await makeEventEmitter({
+      emitEvents: opts.emitEvents,
+      eventsOut: opts.eventsOut ? path.resolve(opts.eventsOut) : null,
+      eventsTruncate: opts.eventsTruncate,
+      strictEvents: opts.strictEvents,
+      context: { run_id: runId, mode, compose_sha256: composeHash }
+    });
+    const gateStart = Date.now();
     const summary = {
-      run_id: compose.run_id || new Date().toISOString(),
+      run_id: runId,
       mode,
       modules: moduleIds,
       results: { passed: 0, failed: 0 }
     };
-    ee.emit('GATES_START', { mode, compose: opts.compose, run_id: compose.run_id || null });
     let successMessage = '';
+    let failureCode = null;
 
     try {
+      await ee.emit('GATES_START', { compose_path: composePath, modules_total: moduleIds.length });
       // Shared checks
       for (const m of compose.modules || []) {
         const mroot = path.join(modulesRoot, m.id);
@@ -417,18 +498,20 @@ program
         const manifest = await validateFile('module.schema.json', fp);
         manifests[m.id] = { manifest, root: mroot };
         if (!Array.isArray(manifest.evidence) || manifest.evidence.length === 0) {
-          throw new Error(`Gate failure: ${m.id} has no evidence bindings.`);
+          throw tmError('E_REQUIRE_UNSAT', `Gate failure: ${m.id} has no evidence bindings.`);
         }
         if (!Array.isArray(manifest.tests) || manifest.tests.length === 0) {
-          throw new Error(`Gate failure: ${m.id} defines no tests.`);
+          throw tmError('E_REQUIRE_UNSAT', `Gate failure: ${m.id} defines no tests.`);
         }
         if (!Array.isArray(manifest.invariants) || manifest.invariants.length === 0) {
-          throw new Error(`Gate failure: ${m.id} defines no invariants.`);
+          throw tmError('E_REQUIRE_UNSAT', `Gate failure: ${m.id} defines no invariants.`);
         }
       }
 
       // Cross-import lint (ESLint preferred, regex fallback)
       let ranEslint = false;
+      const lintStart = Date.now();
+      await ee.emit('LINT_START', { lint_tool: 'eslint' });
       try {
         const { errorCount, diagnostics } = await collectCrossImportDiagnostics([modulesRoot]);
         ranEslint = true;
@@ -438,33 +521,41 @@ program
             return `${rel}:${d.line}:${d.column} ${d.message}`;
           }).join('\n');
           const first = diagnostics[0];
-          ee.emit('GATES_FAIL', {
-            mode,
-            error: 'lint_failed',
+          failureCode = 'E_LINT';
+          await ee.emit('LINT_FAIL', {
+            lint_tool: 'eslint',
+            code: 'E_LINT',
+            message: first?.message,
             file: first ? path.relative(process.cwd(), first.file) : undefined,
             line: first?.line,
-            message: first?.message
+            dur_ms: Date.now() - lintStart
           });
-          throw new Error('ESLint cross-module check failed:\n' + formatted);
+          throw tmError('E_LINT', 'ESLint cross-module check failed:\n' + formatted);
         }
+        await ee.emit('LINT_PASS', { lint_tool: 'eslint', dur_ms: Date.now() - lintStart });
       } catch (err) {
         if (!ranEslint && err && (err.code === 'ERR_MODULE_NOT_FOUND' || (typeof err.message === 'string' && err.message.includes("Cannot find module 'eslint'")))) {
-          ee.emit('GATES_WARN', { warn: 'eslint_unavailable' });
+          await ee.emit('GATES_WARN', { code: 'WARN_ESLINT_UNAVAILABLE', message: 'eslint not available; falling back to regex lint' });
+          const fallbackStart = Date.now();
+          await ee.emit('LINT_START', { lint_tool: 'fallback-regex' });
           const lint = await crossImportLint(modulesRoot);
           if (lint.length) {
             const formatted = lint.slice(0, 20).map(entry => {
               const rel = path.relative(process.cwd(), entry.file);
               return `${rel}:${entry.line} ${entry.msg}`;
             }).join('\n');
-            ee.emit('GATES_FAIL', {
-              mode,
-              error: 'lint_failed',
+            failureCode = 'E_LINT';
+            await ee.emit('LINT_FAIL', {
+              lint_tool: 'fallback-regex',
+              code: 'E_LINT',
+              message: lint[0].msg,
               file: path.relative(process.cwd(), lint[0].file),
               line: lint[0].line,
-              message: lint[0].msg
+              dur_ms: Date.now() - fallbackStart
             });
-            throw new Error('Cross-module import violations:\n' + formatted);
+            throw tmError('E_LINT', 'Cross-module import violations:\n' + formatted);
           }
+          await ee.emit('LINT_PASS', { lint_tool: 'fallback-regex', dur_ms: Date.now() - fallbackStart });
         } else if (!ranEslint) {
           throw err instanceof Error ? err : new Error(String(err));
         } else {
@@ -477,7 +568,7 @@ program
       } else {
         const timeoutMs = Number(opts.timeoutMs ?? 60_000);
         if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-          throw new Error('Gate failure: invalid --timeout-ms value.');
+          throw tmError('E_REQUIRE_UNSAT', 'Gate failure: invalid --timeout-ms value.');
         }
 
         const reqProblems = verifyPortRequires(
@@ -485,11 +576,12 @@ program
           Object.fromEntries(Object.entries(manifests).map(([k, v]) => [k, v.manifest]))
         );
         if (reqProblems.length) {
-          throw new Error('Gate failure: port requirements unmet:\n' + reqProblems.join('\n'));
+          failureCode = 'E_REQUIRE_UNSAT';
+          throw tmError('E_REQUIRE_UNSAT', 'Gate failure: port requirements unmet:\n' + reqProblems.join('\n'));
         }
 
         if (!(compose.wiring && compose.wiring.length) && !(compose.constraints && compose.constraints.length)) {
-          throw new Error('Gate failure: shipping mode requires non-empty wiring or constraints.');
+          throw tmError('E_REQUIRE_UNSAT', 'Gate failure: shipping mode requires non-empty wiring or constraints.');
         }
 
         let total = 0;
@@ -498,15 +590,15 @@ program
           const { manifest, root } = manifests[m.id];
           for (const t of manifest.tests || []) {
             if (typeof t !== 'string') {
-              throw new Error(`Test entry for ${m.id} is not a string: ${JSON.stringify(t)}`);
+              throw tmError('E_REQUIRE_UNSAT', `Test entry for ${m.id} is not a string: ${JSON.stringify(t)}`);
             }
             total += 1;
             const testStart = Date.now();
-            ee.emit('TEST_START', { module: m.id, test: t });
+            await ee.emit('TEST_START', { module: m.id, test: t });
             try {
               if (t.startsWith('script:')) {
                 const scriptRel = t.replace(/^script:/, '').trim();
-                if (!scriptRel) throw new Error('Script entry missing path');
+                if (!scriptRel) throw tmError('E_REQUIRE_UNSAT', 'Script entry missing path');
                 const scriptAbs = path.join(root, scriptRel);
                 await runCmd(process.execPath, [scriptAbs], { cwd: root, timeoutMs });
               } else if (t.endsWith('.json')) {
@@ -519,21 +611,23 @@ program
                   { cwd: root, timeoutMs }
                 );
               } else {
-                throw new Error(`Unknown test entry: ${t}`);
+                throw tmError('E_REQUIRE_UNSAT', `Unknown test entry: ${t}`);
               }
               const dur = Date.now() - testStart;
               passed += 1;
-              ee.emit('TEST_PASS', { module: m.id, test: t, dur_ms: dur });
+              await ee.emit('TEST_PASS', { module: m.id, test: t, dur_ms: dur });
             } catch (e) {
               const dur = Date.now() - testStart;
               const errMsg = e instanceof Error ? e.message : String(e);
-              ee.emit('TEST_FAIL', { module: m.id, test: t, dur_ms: dur, error: errMsg });
+              failureCode = 'E_TEST';
+              await ee.emit('TEST_FAIL', { module: m.id, test: t, dur_ms: dur, error: errMsg, code: 'E_TEST' });
               summary.results = { passed, failed: total - passed };
-              throw new Error(`Test failed for ${m.id} (${t}): ${errMsg}`);
+              throw tmError('E_TEST', `Test failed for ${m.id} (${t}): ${errMsg}`);
             }
           }
         }
 
+        summary.results = { passed, failed: 0 };
         const workspaceRoot = path.resolve(modulesRoot, '..');
         const portsDir = await resolvePortsDir(workspaceRoot);
         const portHarness = await buildPortHarness(manifests, workspaceRoot, portsDir, ee);
@@ -589,15 +683,15 @@ program
             tscBin = null;
           }
           if (!tscBin) {
-            throw new Error('TypeScript compiler not found. Install with `npm i -D typescript`.');
+            throw tmError('E_TSC', 'TypeScript compiler not found. Install with `npm i -D typescript`.');
           }
           try {
             await fs.access(tscBin);
           } catch {
-            throw new Error('TypeScript compiler not found. Install with `npm i -D typescript`.');
+            throw tmError('E_TSC', 'TypeScript compiler not found. Install with `npm i -D typescript`.');
           }
 
-          ee.emit('TSC_START', { mode });
+          await ee.emit('TSC_START', { artifact: path.relative(process.cwd(), tscLogPath) });
           const start = Date.now();
           const child = spawn(process.execPath, [tscBin, '--noEmit', '--project', tsProjectPath], {
             cwd: workspaceRoot,
@@ -616,26 +710,26 @@ program
           await fs.writeFile(tscLogPath, combined);
           if (exitCode !== 0) {
             const lines = combined.split(/\r?\n/).filter(Boolean).slice(0, 10);
-            ee.emit('TSC_FAIL', { mode, dur_ms: duration });
+            failureCode = 'E_TSC';
+            await ee.emit('TSC_FAIL', { dur_ms: duration, artifact: path.relative(process.cwd(), tscLogPath), code: 'E_TSC' });
             if (portHarness.entries?.length) {
               const firstLine = lines[0] || '';
               const match = portHarness.entries.find(entry => firstLine.includes(path.basename(entry.harnessPath)) || combined.includes(entry.harnessPath));
               if (match) {
-                ee.emit('PORT_CHECK_FAIL', { module: match.module, port: match.port, error: 'port_conformance_failed' });
+                await ee.emit('PORT_CHECK_FAIL', { module: match.module, port: match.port, error: 'port_conformance_failed', code: 'E_PORT_CONFORMANCE' });
               }
             }
-            throw new Error(`TypeScript check failed:\n${lines.join('\n')}\nSee full log at ${tscLogPath}`);
+            throw tmError('E_TSC', `TypeScript check failed:\n${lines.join('\n')}\nSee full log at ${tscLogPath}`);
           } else {
-            ee.emit('TSC_PASS', { mode, dur_ms: duration });
+            await ee.emit('TSC_PASS', { dur_ms: duration, artifact: path.relative(process.cwd(), tscLogPath) });
             if (portHarness.entries?.length) {
               for (const entry of portHarness.entries) {
-                ee.emit('PORT_CHECK_PASS', { module: entry.module, port: entry.port });
+                await ee.emit('PORT_CHECK_PASS', { module: entry.module, port: entry.port });
               }
             }
           }
         }
 
-        summary.results = { passed, failed: 0 };
         successMessage = `✓ Shipping tests passed (${passed}/${total}).`;
       }
       summary.duration_ms = Date.now() - gateStart;
@@ -649,21 +743,25 @@ program
           child.on('error', reject);
           child.on('exit', code => {
             if (code === 0) resolve();
-            else reject(new Error(`Hook exited with code ${code}`));
+            else reject(tmError('E_HOOK', `Hook exited with code ${code}`));
           });
           child.stdin.write(JSON.stringify(summary));
           child.stdin.end();
         });
       }
 
-      ee.emit('GATES_PASS', { mode, ...summary.results });
+      await ee.emit('GATES_PASS', { passed: summary.results.passed, failed: summary.results.failed, dur_ms: summary.duration_ms });
       if (successMessage) ee.info(successMessage);
     } catch (err) {
       summary.duration_ms = Date.now() - gateStart;
       const message = err instanceof Error ? err.message : String(err);
       summary.error = message;
-      ee.emit('GATES_FAIL', { mode, error: message, ...summary.results });
+      const code = err && typeof err === 'object' && 'code' in err && err.code ? err.code : (failureCode || 'E_UNKNOWN');
+      summary.code = code;
+      await ee.emit('GATES_FAIL', { code, message, passed: summary.results.passed, failed: summary.results.failed, dur_ms: summary.duration_ms });
       throw err instanceof Error ? err : new Error(message);
+    } finally {
+      await ee.close();
     }
   });
 

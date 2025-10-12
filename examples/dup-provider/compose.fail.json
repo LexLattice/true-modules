@@ -1,0 +1,15 @@
+{
+  "run_id": "dup-provider-fail",
+  "modules": [
+    { "id": "git.diff.core", "version": "0.1.0" },
+    { "id": "git.diff.alt", "version": "0.1.0" },
+    { "id": "safety.validation", "version": "0.1.0" }
+  ],
+  "wiring": [
+    { "from": "safety.validation:SafetyPort", "to": "git.diff.core:SafetyPort" }
+  ],
+  "constraints": [
+    "no-cross-imports",
+    "ports-only-coupling"
+  ]
+}

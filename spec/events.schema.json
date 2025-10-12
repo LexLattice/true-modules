@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://true-modules/spec/events.schema.json",
+  "title": "tm-events@1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "event", "ts", "seq", "source", "context"],
+  "properties": {
+    "schema": { "const": "tm-events@1" },
+    "event": {
+      "type": "string",
+      "enum": [
+        "GATES_START",
+        "GATES_PASS",
+        "GATES_FAIL",
+        "GATES_WARN",
+        "TEST_START",
+        "TEST_PASS",
+        "TEST_FAIL",
+        "LINT_START",
+        "LINT_PASS",
+        "LINT_FAIL",
+        "TSC_START",
+        "TSC_PASS",
+        "TSC_FAIL",
+        "PORT_CHECK_START",
+        "PORT_CHECK_PASS",
+        "PORT_CHECK_FAIL"
+      ]
+    },
+    "ts": { "type": "string", "format": "date-time" },
+    "seq": { "type": "integer", "minimum": 1 },
+    "source": {
+      "type": "object",
+      "required": ["cli", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "cli": { "type": "string" },
+        "version": { "type": "string" }
+      }
+    },
+    "context": {
+      "type": "object",
+      "required": ["run_id", "mode", "compose_sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "run_id": { "type": "string" },
+        "mode": { "type": "string", "enum": ["conceptual", "shipping"] },
+        "compose_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "detail": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "module": { "type": "string" },
+        "port": { "type": "string" },
+        "test": { "type": "string" },
+        "dur_ms": { "type": "number", "minimum": 0 },
+        "error": { "type": "string" },
+        "code": { "type": "string", "pattern": "^[A-Z0-9_]+$" },
+        "artifact": { "type": "string" },
+        "compose_path": { "type": "string" },
+        "modules_total": { "type": "integer", "minimum": 0 },
+        "message": { "type": "string" },
+        "lint_tool": { "type": "string" },
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 0 },
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}
