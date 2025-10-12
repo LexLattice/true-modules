@@ -258,3 +258,53 @@ Wave 4 continues the post-review polish: mine residual lessons, expand cross-p
 After landing, run the end-to-end compose → winner → shipping flow with `--npm-pack`, generate fresh lessons via the miner, and record key follow-ups in `docs/meta-history.md`.
 
 ---
+
+# Implementation Briefs — Wave 5 (C11–C12)
+
+Wave 5 tightens the compose/deploy feedback loop: introduce an override file for last‑mile adjustments and polish the CI pipeline so packaging telemetry and caches keep runs fast. Treat C11 and C12 as a single BO4 prompt so overrides and CI wiring ship together.
+
+---
+
+## C11–C12 — Compose Overrides · CI Polish
+
+- **Objective**: allow intent owners to fine-tune composed plans via override files while keeping CI lean, cached, and event-rich.
+- **Key files**: `tm.mjs`, `docs/composer.md`, `.github/workflows/ci.yml`, `docs/tests.md` (CI notes), `docs/meta-history.md` (post-run record), `examples/` compose fixtures.
+- **Implementation steps**:
+  1. **Override ingestion** (`tm.mjs compose --overrides <file>`):
+     - Parse an overrides JSON file relative to the cwd; support absolute paths.
+     - Merge with the base compose file before validation/build:
+       - `modules[]`: treat `id` as the key; replace matching entries, append new ones.
+       - `wiring[]`: treat `{from,to}` pairs as keys; replace matches, append new wiring segments.
+       - `constraints[]`: start from the base list, append new unique strings, allow overrides to remove entries by prefixing with `-constraint-name`.
+     - Emit `COMPOSE_OVERRIDES_APPLIED` event summarising which sections changed. Preserve deterministic ordering (modules sorted by `id`, wiring by `{from,to}`) so repeated runs are stable.
+     - Validation must still run after merging; refuse to continue if the override file is missing or invalid JSON (surface `E_COMPOSE_OVERRIDES`).
+  2. **Docs & fixtures**:
+     - Extend `docs/composer.md` with an “Overrides” section covering file shape, merge semantics, examples (swapping a provider, adding/removing constraints), and interaction with winner outputs.
+     - Add a lightweight fixture under `examples/compose.overrides/` (base compose + overrides + resulting plan) that the docs reference.
+     - Update `docs/tests.md` CI section with a note that overrides must be exercised locally before handing off to CI.
+  3. **Workflow split & caching** (`.github/workflows/ci.yml`):
+     - Split into jobs `schemas`, `composer_gates`, and `rust_check`. Ensure `composer_gates` depends on `schemas` when schema generation feeds compose/gates.
+     - Cache `~/.npm`/`node_modules` and Cargo (`~/.cargo`, `target`) keyed by `package-lock.json`/`Cargo.lock`.
+     - In `composer_gates`, run:
+       ```bash
+       node tm.mjs compose --compose examples/compose.greedy.json --modules-root examples/modules --overrides examples/compose.overrides/overrides.json --out examples/winner
+       node tm.mjs gates shipping --compose examples/compose.greedy.json --modules-root examples/modules --emit-events --events-out artifacts/events.ndjson --strict-events
+       ```
+       Pipe events through `jq -c . >/dev/null` to ensure clean NDJSON.
+     - Upload `artifacts/events.ndjson` and any override diff artifacts as job artifacts.
+     - Add job summaries or log groups so key timings are obvious in GitHub UI.
+  4. **Event hygiene**:
+     - Extend the event schema (if needed) so overriding emits consistent telemetry (`detail`: `{ added: { modules: [...] }, replaced: [...], removed_constraints: [...] }`).
+     - Ensure CI still fails fast when `--strict-events` finds schema violations; caches must not hide failures.
+  5. **Validation checklist**:
+     - Locally run the compose command with `--overrides` against the fixtures and confirm the resulting plan reflects replacements/removals as intended.
+     - Run the split CI workflow via `act` or targeted GitHub Actions dispatch to verify caching hits and artifacts upload.
+     - After BO4 winner selection and merge, append the cycle summary (winner, borrowed imports, gaps, residual risks, follow-ups) to `docs/meta-history.md`.
+- **Acceptance**:
+  - `tm.mjs compose --overrides …` deterministically merges modules, wiring, and constraints, failing with actionable errors when inputs are missing or invalid.
+  - Docs illustrate override usage and the example files mirror the described behavior.
+  - CI workflow runs the three split jobs with caches, emits events, uploads artifacts, and completes faster than the previous monolithic job.
+  - Event telemetry remains schema-compliant and highlights override activity for auditors.
+  - Meta history reflects the wave’s outcomes once the run completes.
+
+---
