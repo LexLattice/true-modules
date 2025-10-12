@@ -1,8 +1,8 @@
 {
-  "run_id": "2025-10-10T15:35:43.158Z",
+  "run_id": "2025-10-12T13:15:09.514Z",
   "modules": [
     {
-      "id": "worktree.manager",
+      "id": "safety.validation",
       "version": "0.1.0"
     },
     {
@@ -10,11 +10,11 @@
       "version": "0.1.0"
     },
     {
-      "id": "git.index.controller",
+      "id": "worktree.manager",
       "version": "0.1.0"
     },
     {
-      "id": "safety.validation",
+      "id": "git.index.controller",
       "version": "0.1.0"
     }
   ],

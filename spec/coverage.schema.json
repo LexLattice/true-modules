@@ -41,6 +41,18 @@
               "type": "string"
             }
           },
+          "provides_ports": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "requires": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "risk": {
             "type": "number",
             "minimum": 0,

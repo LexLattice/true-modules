@@ -3,21 +3,28 @@
   "facets": {
     "architecture_clarity": {
       "score": 0,
-      "evidence": []
+      "confidence": 0,
+      "evidence": [],
+      "rationale": "clarity synopsis"
     },
     "checklist_coverage": {
       "score": 0,
+      "confidence": 0,
       "must_total": 0,
       "must_impl": 0,
-      "evidence": []
+      "evidence": [],
+      "rationale": "checklist synopsis"
     },
     "novelty": {
       "score": 0,
+      "confidence": 0,
       "new_patterns": [],
-      "evidence": []
+      "evidence": [],
+      "rationale": "novelty synopsis"
     },
     "coherence": {
       "score": 0,
+      "confidence": 0,
       "metrics": {
         "rep": [
           0,
@@ -30,9 +37,19 @@
           0
         ]
       },
-      "missing_paths": []
+      "missing_paths": [],
+      "evidence": [],
+      "rationale": "coherence synopsis"
     }
   },
   "overall": 0,
-  "rationale": "brief justification for the score"
+  "rationale": "brief justification for the score",
+  "confidence": 0,
+  "rejected_alternatives": [
+    {
+      "variant": "varY",
+      "reason": "requires[] unsatisfied",
+      "confidence": 0
+    }
+  ]
 }

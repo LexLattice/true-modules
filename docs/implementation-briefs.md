@@ -203,6 +203,7 @@ Prompt packs equip both implementers and meta reviewers with consistent, self-co
   3. **Rubric alignment**: extend `docs/bo4/meta/rubric.v1.json` with a note on penalising unmet `requires[]` and duplicate providers; update the template (`docs/bo4/templates/variant_report.v1.stub.json`) so the meta report explicitly records confidence per goal and rationale for discarded variants.
   4. **Schema tweak** (if necessary): ensure `docs/bo4/meta/meta_report.v1.schema.json` permits new fields (e.g., `confidence` per decision) or tighten descriptions so the prompt-to-report loop stays consistent.
   5. **Examples/testing**: run `node tm.mjs meta --coverage ./examples/coverage.json --respect-requires --out ./examples/compose.greedy.json` and confirm the resulting plan excludes modules with unsatisfied requirements. Capture a before/after diff in the PR description.
+  6. **Workflow note**: meta reviewers should prefer `--respect-requires` during tournament runs so the greedy selector only emits plans where every module dependency (per `provides_ports`/`requires`) is satisfied; escalate any unresolved duplicates as residual risks.
 - **Acceptance**:
   - Updated prompt emphasises requirements checks, duplicate-provider handling, and evidence-backed scoring.
   - With `--respect-requires`, the greedy meta planner no longer selects modules whose `requires[]` cannot be fulfilled by the current goal set.
