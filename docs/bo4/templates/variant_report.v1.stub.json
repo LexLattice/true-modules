@@ -1,48 +1,90 @@
 {
-  "summary": "What you explored and how to exercise it later.",
-  "checklist": [
-    {
-      "id": "P1",
-      "status": "implemented",
-      "notes": "why and how"
-    }
-  ],
-  "architecture": {
-    "components_added": [
-      {
-        "name": "ComponentName",
-        "path": "apps/ade-tauri/src/...",
-        "role": "ui"
-      }
+    "summary": "What you explored and how to exercise it later.",
+    "checklist": [
+        {
+            "id": "P1",
+            "status": "implemented",
+            "notes": "why and how"
+        }
     ],
-    "components_modified": [],
-    "data_flow": "Key producers/consumers introduced by this change.",
-    "state_management": "Where/how state is held and mutated.",
-    "invariants": [
-      "maintain X when Y happens"
+    "architecture": {
+        "components_added": [
+            {
+                "name": "ComponentName",
+                "path": "apps/ade-tauri/src/...",
+                "role": "ui"
+            }
+        ],
+        "components_modified": [],
+        "data_flow": "Key producers/consumers introduced by this change.",
+        "state_management": "Where/how state is held and mutated.",
+        "invariants": [
+            "maintain X when Y happens"
+        ],
+        "tradeoffs": [
+            "chose virtualization over absolute measurement"
+        ],
+        "alternatives_considered": [
+            {
+                "option": "Approach A",
+                "rejected_because": "reason"
+            }
+        ],
+        "open_questions": [
+            "Should resize be debounced at source?"
+        ]
+    },
+    "tests": {
+        "added": [],
+        "how_to_run": "pnpm -F @ade/tauri-app test -- --run"
+    },
+    "metrics": {
+        "files_changed": 0,
+        "insertions": 0,
+        "deletions": 0
+    },
+    "risks": [],
+    "todos": [],
+    "decisions": [
+        {
+            "option": "Select git.diff.core@var4",
+            "rationale": "Best evidence on diff strategy and integrates with SafetyPort",
+            "rejected_alternatives": [
+                {
+                    "variant": "git.diff.alt@var3",
+                    "reason": "SafetyPort dependency unmet",
+                    "confidence": 0.3
+                }
+            ]
+        }
     ],
-    "tradeoffs": [
-      "chose virtualization over absolute measurement"
+    "goals": [
+        {
+            "id": "P1",
+            "status": "pass",
+            "evidence": [
+                "reports/var1.md#p1"
+            ],
+            "confidence": 0.7,
+            "rejected_alternatives": [
+                {
+                    "variant": "worktree.manager@var2",
+                    "reason": "lacked integration tests",
+                    "confidence": 0.4
+                }
+            ]
+        }
     ],
-    "alternatives_considered": [
-      {
-        "option": "Approach A",
-        "rejected_because": "reason"
-      }
+    "residual_risks": [
+        "SafetyPort provider swap requires regression sweep"
     ],
-    "open_questions": [
-      "Should resize be debounced at source?"
-    ]
-  },
-  "tests": {
-    "added": [],
-    "how_to_run": "pnpm -F @ade/tauri-app test -- --run"
-  },
-  "metrics": {
-    "files_changed": 0,
-    "insertions": 0,
-    "deletions": 0
-  },
-  "risks": [],
-  "todos": []
+    "followups": [
+        {
+            "title": "Verify SafetyPort against Windows edge cases",
+            "priority": "P1",
+            "owner": "qa-team",
+            "pointer": "reports/var2.md#risks"
+        }
+    ],
+    "confidence": 0.65
 }

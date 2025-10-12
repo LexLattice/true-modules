@@ -17,6 +17,12 @@
       "covers": [
         "P3"
       ],
+      "provides_ports": [
+        "DiffPort@1"
+      ],
+      "requires": [
+        "SafetyPort@1"
+      ],
       "risk": 0.2,
       "evidence_strength": 0.8
     },
@@ -25,6 +31,10 @@
       "covers": [
         "P2"
       ],
+      "provides_ports": [
+        "IndexPort@1"
+      ],
+      "requires": [],
       "risk": 0.3,
       "evidence_strength": 0.6
     },
@@ -33,6 +43,10 @@
       "covers": [
         "P1"
       ],
+      "provides_ports": [
+        "WorktreePort@1"
+      ],
+      "requires": [],
       "risk": 0.2,
       "evidence_strength": 0.7
     },
@@ -41,6 +55,10 @@
       "covers": [
         "P4"
       ],
+      "provides_ports": [
+        "SafetyPort@1"
+      ],
+      "requires": [],
       "risk": 0.1,
       "evidence_strength": 0.5
     }

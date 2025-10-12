@@ -15,7 +15,8 @@
       "Has alternatives_considered OR open_questions"
     ],
     "checklist_coverage": [
-      "Count MUST items implemented; partial gives half credit"
+      "Count MUST items implemented; partial gives half credit",
+      "Penalise selections that leave module requires[] unmet or duplicate providers unresolved"
     ],
     "novelty": [
       "Introduces patterns/modules not present in knowledge registry",
@@ -26,5 +27,5 @@
       "metrics roughly match diff (\u00b110 lines tolerance)"
     ]
   },
-  "notes": "Score each facet 0\u2013100 then compute weighted overall."
+  "notes": "Score each facet 0\u2013100 then compute weighted overall. Deduct heavily if the compose plan ignores module requires[] or leaves duplicate port providers unresolved."
 }

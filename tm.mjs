@@ -395,51 +395,234 @@ program
 program
   .command('meta')
   .requiredOption('--coverage <file>', 'Path to coverage.json')
-  .option('--out <file>', './compose.greedy.json', 'Output compose file')
+  .option('--out <file>', 'Output compose file', './compose.greedy.json')
+  .option('--respect-requires', 'Skip modules whose requires[] are not satisfied by the current selection', false)
   .description('Greedy set-cover with simple risk/evidence scoring')
   .action(async (opts) => {
     const cov = await validateFile('coverage.schema.json', path.resolve(opts.coverage));
     const weights = cov.weights || {};
     const goals = new Set(cov.goals || []);
+    const respectRequires = Boolean(opts.respectRequires);
 
-    // Build module->goal map and attach risk/evidence
-    const meta = {};
+    
+    // Build module metadata and index ports to providers
+    const moduleInfo = new Map();
+    const modulesProvidingPort = new Map();
+
     for (const p of (cov.provides || [])) {
       const mod = p.module; // e.g., "git.diff.core@var4"
-      if (!meta[mod]) meta[mod] = { goals: new Set(), risk: 0.5, ev: 0.5 };
-      for (const g of (p.covers || [])) meta[mod].goals.add(g);
-      if (typeof p.risk === 'number') meta[mod].risk = p.risk;
-      if (typeof p.evidence_strength === 'number') meta[mod].ev = p.evidence_strength;
+      if (!moduleInfo.has(mod)) {
+        moduleInfo.set(mod, {
+          goals: new Set(),
+          risk: 0.5,
+          ev: 0.5,
+          provides: new Set(),
+          requires: new Set()
+        });
+      }
+      const info = moduleInfo.get(mod);
+      for (const g of (p.covers || [])) info.goals.add(g);
+      if (typeof p.risk === 'number') info.risk = p.risk;
+      if (typeof p.evidence_strength === 'number') info.ev = p.evidence_strength;
+      for (const port of (p.provides_ports || [])) {
+        if (typeof port === 'string' && port.length) {
+          info.provides.add(port);
+          if (!modulesProvidingPort.has(port)) modulesProvidingPort.set(port, new Set());
+          modulesProvidingPort.get(port).add(mod);
+        }
+      }
+      for (const req of (p.requires || [])) {
+        if (typeof req === 'string' && req.length) {
+          info.requires.add(req);
+        }
+      }
     }
 
+    const available = new Set(moduleInfo.keys());
+    const selectedSet = new Set();
+    const selectionOrder = [];
     const covered = new Set();
-    const selected = [];
+    const selectedPorts = new Set();
+
+    function ensureProvides(targetSet, modId) {
+      const info = moduleInfo.get(modId);
+      if (!info) return;
+      for (const port of info.provides) targetSet.add(port);
+    }
+
+    for (const modId of selectedSet) ensureProvides(selectedPorts, modId);
+
+    function bundleFor(moduleId) {
+      if (!respectRequires) {
+        if (!available.has(moduleId)) return { feasible: false, modules: [] };
+        return { feasible: true, modules: [moduleId] };
+      }
+
+      const toAdd = new Set();
+      const visiting = new Set();
+      const plannedPorts = new Set(selectedPorts);
+
+      function ensurePlanned(modId) {
+        const info = moduleInfo.get(modId);
+        if (!info) return;
+        for (const port of info.provides) plannedPorts.add(port);
+      }
+
+      for (const mod of selectedSet) ensurePlanned(mod);
+
+      function dfs(id) {
+        if (selectedSet.has(id)) {
+          ensurePlanned(id);
+          return true;
+        }
+        if (!available.has(id) && !toAdd.has(id)) return false;
+        const info = moduleInfo.get(id);
+        if (!info) return false;
+        if (visiting.has(id)) return false;
+        visiting.add(id);
+
+        ensurePlanned(id);
+
+        for (const req of info.requires) {
+          if (plannedPorts.has(req) || info.provides.has(req)) continue;
+
+          let satisfied = false;
+          for (const pending of toAdd) {
+            const pendingInfo = moduleInfo.get(pending);
+            if (pendingInfo && pendingInfo.provides.has(req)) {
+              satisfied = true;
+              break;
+            }
+          }
+          if (satisfied) continue;
+
+          const candidates = modulesProvidingPort.get(req);
+          if (!candidates || candidates.size === 0) {
+            visiting.delete(id);
+            return false;
+          }
+
+          let provider = null;
+          for (const cand of candidates) {
+            if (selectedSet.has(cand) || toAdd.has(cand)) {
+              provider = cand;
+              break;
+            }
+          }
+
+          if (!provider) {
+            const availableCandidates = [...candidates].filter(c => available.has(c));
+            if (availableCandidates.length === 0) {
+              visiting.delete(id);
+              return false;
+            }
+
+            let bestProvider = null;
+            let bestScore = Number.NEGATIVE_INFINITY;
+            for (const cand of availableCandidates) {
+              const candInfo = moduleInfo.get(cand);
+              if (!candInfo) continue;
+              const score = (candInfo.ev * 0.5) - candInfo.risk;
+              if (score > bestScore) {
+                bestScore = score;
+                bestProvider = cand;
+              }
+            }
+
+            if (!bestProvider) {
+              visiting.delete(id);
+              return false;
+            }
+
+            provider = bestProvider;
+          }
+
+          if (!dfs(provider)) {
+            visiting.delete(id);
+            return false;
+          }
+          ensurePlanned(provider);
+        }
+
+        visiting.delete(id);
+        if (!selectedSet.has(id)) {
+          toAdd.add(id);
+          ensurePlanned(id);
+        }
+        return true;
+      }
+
+      if (!dfs(moduleId)) return { feasible: false, modules: [] };
+      return { feasible: true, modules: Array.from(toAdd) };
+    }
 
     function gainOf(mod) {
-      const info = meta[mod];
-      let gsum = 0;
-      for (const g of (info.goals || [])) {
-        if (!covered.has(g)) gsum += (typeof weights[g] === 'number' ? weights[g] : 1);
+      if (!available.has(mod)) return { gain: Number.NEGATIVE_INFINITY, modules: [] };
+      const bundle = bundleFor(mod);
+      if (!bundle.feasible || bundle.modules.length === 0) {
+        if (!bundle.feasible) return { gain: Number.NEGATIVE_INFINITY, modules: [] };
       }
-      const riskPenalty = info.risk;           // 0..1
-      const evidenceBonus = info.ev * 0.5;     // 0..0.5
-      return gsum + evidenceBonus - riskPenalty;
+
+      let gsum = 0;
+      let riskPenalty = 0;
+      let evidenceBonus = 0;
+      let duplicatePenalty = 0;
+      const bundlePorts = new Set();
+
+      for (const id of bundle.modules) {
+        const info = moduleInfo.get(id);
+        if (!info) continue;
+        for (const g of info.goals) {
+          if (!covered.has(g)) gsum += (typeof weights[g] === 'number' ? weights[g] : 1);
+        }
+        riskPenalty += info.risk;
+        evidenceBonus += info.ev * 0.5;
+
+        for (const port of info.provides) {
+          if (selectedPorts.has(port) || bundlePorts.has(port)) duplicatePenalty += 1;
+          bundlePorts.add(port);
+        }
+      }
+
+      return { gain: gsum + evidenceBonus - riskPenalty - duplicatePenalty, modules: bundle.modules };
     }
 
-    while (true) {
-      let best = null, bestGain = 0;
-      for (const mod of Object.keys(meta)) {
-        const g = gainOf(mod);
-        if (g > bestGain) { bestGain = g; best = mod; }
+    while (available.size > 0) {
+      let best = null;
+      let bestGain = Number.NEGATIVE_INFINITY;
+      let bestBundle = [];
+      for (const mod of available) {
+        const result = gainOf(mod);
+        if (result.gain > bestGain) {
+          bestGain = result.gain;
+          best = mod;
+          bestBundle = result.modules;
+        }
       }
       if (!best || bestGain <= 0) break;
-      selected.push(best);
-      for (const g of meta[best].goals) covered.add(g);
-      delete meta[best];
+
+      for (const id of bestBundle) {
+        if (selectedSet.has(id)) continue;
+        selectedSet.add(id);
+        available.delete(id);
+        selectionOrder.push(id);
+        const info = moduleInfo.get(id);
+        if (info) {
+          for (const g of info.goals) covered.add(g);
+          for (const port of info.provides) selectedPorts.add(port);
+        }
+      }
       if ([...goals].every(g => covered.has(g))) break;
     }
 
-    const modulesList = selected.map(id => ({ id: id.split('@')[0], version: "0.1.0" }));
+    const modulesSeen = new Set();
+    const modulesList = [];
+    for (const id of selectionOrder) {
+      const base = id.split('@')[0];
+      if (modulesSeen.has(base)) continue;
+      modulesSeen.add(base);
+      modulesList.push({ id: base, version: "0.1.0" });
+    }
 
     const compose = {
       run_id: new Date().toISOString(),

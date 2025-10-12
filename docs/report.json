@@ -1,26 +1,47 @@
 {
-  "summary": "Documented the implementer workflow with a prompt pack and checklist so teams can align modules with gates and evidence later.",
+  "summary": "Updated the meta reviewer guidance and planner to enforce module dependency discipline and confidence reporting.",
   "checklist": [
-    {"id": "P1", "status": "implemented", "notes": "Added prompt pack, checklist, and surfaced both in onboarding docs."}
+    {
+      "id": "C7",
+      "status": "implemented",
+      "notes": "Meta prompt, solver, and docs now cover requires[] checks and confidence capture."
+    }
   ],
   "architecture": {
     "components_added": [],
     "components_modified": [],
-    "data_flow": "Documentation-only change; no runtime producers or consumers added.",
-    "state_management": "No code paths modified; state handling unchanged.",
+    "data_flow": "Coverage metadata (provides_ports/requires) now feeds the meta CLI scorer before greedy selection.",
+    "state_management": "The meta CLI stores selected module ports and requirements in sets while evaluating gains.",
     "invariants": [
-      "Prompt and checklist links use stable relative paths to specs and docs."
+      "Coverage entries include provides_ports and requires arrays when dependencies exist.",
+      "When --respect-requires is enabled the planner never selects a module without a satisfied provider."
     ],
     "tradeoffs": [
-      "Kept guidance concise for readability, leaving deeper examples to existing docs."
+      "Skipping modules until dependencies are satisfied may leave some goals uncovered if providers are missing, but avoids unsafe plans."
     ],
-    "alternatives_considered": [],
+    "alternatives_considered": [
+      {
+        "option": "Penalize unmet requires with a smaller score deduction",
+        "rejected_because": "Deterministically excluding modules keeps the greedy heuristic predictable and dependency-safe."
+      }
+    ],
     "open_questions": [
-      "Should we automate reminders to complete the checklist telemetry?"
+      "Should the planner discover manifests automatically when coverage omits provides_ports metadata?"
     ]
   },
-  "tests": {"added": [], "how_to_run": "node tm.mjs gates shipping --emit-events --strict-events"},
-  "metrics": {"files_changed": 5, "insertions": 111, "deletions": 0},
-  "risks": ["Documentation may fall out of sync with schema or gate updates."],
-  "todos": ["Collect implementer feedback after the prompt pack ships."]
+  "tests": {
+    "added": [],
+    "how_to_run": "node tm.mjs meta --coverage ./examples/coverage.json --respect-requires --out ./examples/compose.greedy.json"
+  },
+  "metrics": {
+    "files_changed": 11,
+    "insertions": 239,
+    "deletions": 58
+  },
+  "risks": [
+    "Coverage producers that skip provides_ports/requires may see modules dropped under --respect-requires."
+  ],
+  "todos": [
+    "Consider adding manifest discovery so --respect-requires can infer ports without annotated coverage."
+  ]
 }
