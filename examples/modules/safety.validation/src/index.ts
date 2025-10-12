@@ -120,7 +120,6 @@ export const safetyPort = {
       if (normalized.startsWith('\\\\')) return false;
       if (!/^[A-Za-z]:\\/.test(normalized)) return false;
       const segments = normalized.split(/[\\/]+/).filter(Boolean);
-      if (segments.length === 0) return false;
       const leaf = segments[segments.length - 1];
       if (WINDOWS_RESERVED.test(leaf)) return false;
       return true;

@@ -24,3 +24,26 @@ Records of tournament outcomes and review insights once a pull request wraps. Ea
 - **Residual risks**: Coverage producers that omit provides_ports/requires will see their modules dropped under --respect-requires.
 - **Follow-ups / TODOs**: Consider adding manifest discovery so the meta solver can infer dependencies when annotations are missing.
 
+## C8–C10 — Lessons Miner · SafetyPort Pack · Winner Pack Smoke
+- **Winner**: `var1` (branch `var1-base`, commit `c2e593c38202cc4072f4a79a352a25d3a99f49a2`)
+- **Why it won**:
+  - Shipped the new `tm lessons mine` CLI plus docs/fixtures so follow-ups and residual risks collapse into a deterministic JSON feed.
+  - Hardened the SafetyPort example for Windows (normalisation + reserved-device guards) and added the platform-specific harness that exercises real cases on Windows but skips cleanly elsewhere.
+  - Added optional `--npm-pack` smoke in shipping gates and taught the TypeScript composer to emit winner/package.json, keeping packaging checks fast and cleanup automatic.
+- **Imports pulled in**:
+  - From `var2`: richer npm-pack telemetry (NPM_PACK_* events, summary wiring, tarball cleanup) and the improved Windows harness that locates the module via `__dirname`.
+- **Why other variants fell short**:
+  - `var2` mixed in a second lessons implementation that depended on the `glob` package and left dead CLI helpers behind.
+  - `var3` only normalised Windows paths; its `isSafe` logic still allowed UNC/relative inputs, so Windows tests never caught unsafe cases.
+  - `var4` skipped the SafetyPort changes entirely, so the Windows fixtures wouldn’t validate anything.
+- **Review feedback addressed**:
+  - Removed the duplicate lessons-helper block and the unused `npmPackSmoke` stub (Gemini caught both) and dropped the `glob` dependency.
+  - Outstanding: tighten `globHasWildcards` to match the supported syntax and trim the unreachable check in the SafetyPort path logic (tracked for the next patch).
+- **Tradeoffs**: Custom glob expansion avoids new dependencies, but only supports `*`/`?`; more complex patterns still require manual curation.
+- **Open questions**: Confirm npm-pack smoke and the Windows harness on a native Windows runner, and decide if lessons should attribute follow-ups to source reports.
+- **Residual risks**: npm-pack smoke skips when npm is absent, so packaging gaps can hide on stripped environments.
+- **Follow-ups / TODOs**:
+  - Exercise the Windows SafetyPort pack in CI (docs/report.json).
+  - Extend the lessons miner with source attribution for follow-ups/residual risks.
+  - Align the glob helper and SafetyPort guard per outstanding review notes.
+

@@ -448,7 +448,7 @@ function normalizeGlobPattern(pattern) {
 }
 
 function globHasWildcards(pattern) {
-  return /[*?[\]{}]/.test(pattern);
+  return /[*?]/.test(pattern);
 }
 
 function globBaseDir(pattern) {
