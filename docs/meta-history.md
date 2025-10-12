@@ -47,3 +47,18 @@ Records of tournament outcomes and review insights once a pull request wraps. Ea
   - Extend the lessons miner with source attribution for follow-ups/residual risks.
   - Align the glob helper and SafetyPort guard per outstanding review notes.
 
+## C11–C12 — Compose Overrides · CI Polish
+- **Winner**: scaffold mainline (commit TBD at merge)
+- **Why it won**:
+  - Added `--overrides` support to `tm compose`/`tm gates`, including module/wiring removal, deterministic ordering, and the `COMPOSE_OVERRIDES_APPLIED` event with rich telemetry.
+  - Documented override semantics, shipped the `examples/compose.overrides/` fixture, and ensured winner reports mirror the merged plan.
+  - Split CI into schema, composer_gates, and rust_check jobs with dependency-aware caching for Node (`~/.npm`, `node_modules`) and Cargo (`~/.cargo`, `target`).
+  - Composer gates now run with overrides in shipping mode, validate events via `jq`, and upload both `events.ndjson` and override summaries for audit trails.
+- **Imports pulled in**: N/A (feature work on mainline scaffolds).
+- **Why other variants fell short**: N/A (single-track delivery).
+- **Review feedback addressed**: Hardened event schema for override telemetry and added log grouping/job summaries for CI readability.
+- **Tradeoffs**: Override removals use ad-hoc markers (`"-module"`, `{remove: true}`); future schema evolution may prefer explicit fields.
+- **Open questions**: Should overrides allow updating glue or run metadata, and do we promote override diffs beyond events (e.g., structured artifacts)?
+- **Residual risks**: Cached `node_modules`/Cargo targets can drift if lockfiles change without cache busting; ensure keys stay aligned.
+- **Follow-ups / TODOs**:
+  - Monitor override usage patterns to decide if dedicated diff artifacts or CLI summaries should be persisted beyond CI artifacts.

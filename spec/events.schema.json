@@ -11,6 +11,7 @@
       "type": "string",
       "enum": [
         "GATES_START",
+        "COMPOSE_OVERRIDES_APPLIED",
         "GATES_PASS",
         "GATES_FAIL",
         "GATES_WARN",
@@ -45,7 +46,7 @@
       "additionalProperties": false,
       "properties": {
         "run_id": { "type": "string" },
-        "mode": { "type": "string", "enum": ["conceptual", "shipping"] },
+        "mode": { "type": "string", "enum": ["conceptual", "shipping", "compose"] },
         "compose_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       }
     },
@@ -67,7 +68,35 @@
         "file": { "type": "string" },
         "line": { "type": "integer", "minimum": 0 },
         "passed": { "type": "integer", "minimum": 0 },
-        "failed": { "type": "integer", "minimum": 0 }
+        "failed": { "type": "integer", "minimum": 0 },
+        "added": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "modules": { "type": "array", "items": { "type": "string" } },
+            "wiring": { "type": "array", "items": { "type": "string" } },
+            "constraints": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "replaced": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "modules": { "type": "array", "items": { "type": "string" } },
+            "wiring": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "removed": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "modules": { "type": "array", "items": { "type": "string" } },
+            "wiring": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "removed_constraints": { "type": "array", "items": { "type": "string" } },
+        "sections": { "type": "array", "items": { "type": "string" } },
+        "overrides_path": { "type": "string" }
       }
     }
   }

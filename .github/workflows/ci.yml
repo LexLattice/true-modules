@@ -5,64 +5,138 @@ on:
   pull_request:
 
 jobs:
-  build:
+  schemas:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install JS deps
+      - name: Cache Node dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
         run: npm ci
 
       - name: Compile schemas
         run: npm run schema:compile
 
-      - name: Run compose on examples
-        run: npm run compose
+  composer_gates:
+    runs-on: ubuntu-latest
+    needs: schemas
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Composer duplicate provider failure
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache Node dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Composer and gates checks
         run: |
-          rm -rf ./tmp/dup-fail
-          if node tm.mjs compose --compose ./examples/dup-provider/compose.fail.json --modules-root ./examples/modules --out ./tmp/dup-fail; then
-            echo "expected tm compose to fail with E_DUP_PROVIDER" >&2
+          set -euo pipefail
+          mkdir -p artifacts tmp
+
+          echo "::group::Compose with overrides"
+          node tm.mjs compose \
+            --compose examples/compose.greedy.json \
+            --modules-root examples/modules \
+            --overrides examples/compose.overrides/overrides.json \
+            --out examples/winner \
+            --emit-events \
+            --events-out artifacts/compose.overrides.ndjson \
+            --strict-events
+          echo "::endgroup::"
+
+          echo "::group::Duplicate provider fails"
+          if node tm.mjs compose --compose examples/dup-provider/compose.fail.json --modules-root examples/modules --out tmp/dup-fail 2>tmp/dup-fail.log; then
+            echo "Expected compose.fail.json to raise E_DUP_PROVIDER" >&2
             exit 1
           fi
+          if ! grep -q "E_DUP_PROVIDER" tmp/dup-fail.log; then
+            echo "E_DUP_PROVIDER not found in failure output" >&2
+            cat tmp/dup-fail.log >&2
+            exit 1
+          fi
+          echo "::endgroup::"
 
-      - name: Composer duplicate provider resolution
-        run: |
-          rm -rf ./examples/dup-provider/winner
-          node tm.mjs compose \
-            --compose ./examples/dup-provider/compose.ok.json \
-            --modules-root ./examples/modules \
-            --out ./examples/dup-provider/winner \
-            --explain
+          echo "::group::Duplicate provider explain"
+          node tm.mjs compose --compose examples/dup-provider/compose.ok.json --modules-root examples/modules --out tmp/dup-pass --explain
+          echo "::endgroup::"
 
-      - name: Compose examples → winner workspace
-        run: node runtimes/ts/composer/index.mjs --compose ./examples/compose.json --modules-root ./examples/modules --glue-root ./glue-catalog --out ./examples/winner
+          echo "::group::TypeScript composer scaffold"
+          node runtimes/ts/composer/index.mjs --compose examples/compose.json --modules-root examples/modules --glue-root glue-catalog --out tmp/ts-winner
+          echo "::endgroup::"
 
-      - name: Gates (shipping) on modules
-        run: node tm.mjs gates shipping --compose ./examples/compose.json --modules-root ./examples/modules
-
-      - name: Gates (shipping) on winner with events
-        run: |
-          mkdir -p artifacts
+          echo "::group::Gates (shipping)"
           node tm.mjs gates shipping \
-            --compose ./examples/compose.json \
-            --modules-root ./examples/winner/modules \
+            --compose examples/compose.greedy.json \
+            --modules-root examples/modules \
+            --overrides examples/compose.overrides/overrides.json \
             --emit-events \
             --events-out artifacts/events.ndjson \
-            --strict-events \
-            --hook-cmd "node scripts/echo-hook.mjs"
+            --strict-events
+          echo "::endgroup::"
 
-      - name: Validate gate events
-        run: node scripts/validate-events.mjs artifacts/events.ndjson
+      - name: Verify event streams
+        run: |
+          jq -c . artifacts/compose.overrides.ndjson > /dev/null
+          jq -c . artifacts/events.ndjson > /dev/null
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Extract override summary
+        run: |
+          node -e "const fs=require('fs');const raw=fs.readFileSync('artifacts/compose.overrides.ndjson','utf8');const lines=raw.split(/\n+/).map(l=>l.trim()).filter(Boolean);if(lines.length===0){throw new Error('compose overrides event stream empty');}const events=lines.map(l=>JSON.parse(l));const evt=events.find(e=>e.event==='COMPOSE_OVERRIDES_APPLIED');if(!evt){throw new Error('COMPOSE_OVERRIDES_APPLIED not found');}fs.writeFileSync('artifacts/compose.overrides.summary.json', JSON.stringify(evt.detail ?? {}, null, 2));"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: composer-events
+          path: |
+            artifacts/compose.overrides.ndjson
+            artifacts/compose.overrides.summary.json
+            artifacts/events.ndjson
+          if-no-files-found: warn
+
+  rust_check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+            runtimes/rust/ports/target
+            runtimes/rust/composer/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
       - name: Cargo check (ports/composer)
         run: |

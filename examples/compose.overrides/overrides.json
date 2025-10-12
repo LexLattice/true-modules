@@ -1,0 +1,17 @@
+{
+  "modules": [
+    "-git.diff.core",
+    { "id": "git.diff.alt", "version": "0.1.0" }
+  ],
+  "wiring": [
+    { "from": "git.diff.core:DiffPort", "to": "orchestrator:DiffPort", "remove": true },
+    { "from": "safety.validation:SafetyPort", "to": "git.diff.core:SafetyPort", "remove": true },
+    { "from": "git.diff.alt:DiffPort", "to": "orchestrator:DiffPort" },
+    { "from": "safety.validation:SafetyPort", "to": "git.diff.alt:SafetyPort" },
+    { "from": "git.index.controller:IndexPort", "to": "orchestrator:IndexPort" }
+  ],
+  "constraints": [
+    "-ports-only-coupling",
+    "prefer:DiffPort@1=git.diff.alt"
+  ]
+}

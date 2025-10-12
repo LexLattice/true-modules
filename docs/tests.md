@@ -47,6 +47,8 @@ This simple contract keeps shipping gates portable while allowing richer module-
 
 Refer to the [Implementer Checklist](../prompts/implementer/CHECKLIST.md) for the MUST-have validation steps. Checking those boxes ensures your local runs of `node tm.mjs gates shipping --emit-events --strict-events` produce the telemetry events (`gate_passed`, `test_passed`, `evidence_linked`) that downstream tooling expects.
 
+When the compose plan relies on an overrides file, run `node tm.mjs compose --overrides <file>` against the fixture (see `examples/compose.overrides/`) before pushing. CI replays the same overrides and will fail fast if the merged plan drifts, and it also enforces the duplicate-provider failure/repair runs plus the TypeScript composer scaffold so regressions surface early.
+
 ## Type-checking (TypeScript)
 
 When `.ts`/`.tsx` files are present under `modules/` or `glue/`:

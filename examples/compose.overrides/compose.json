@@ -1,0 +1,17 @@
+{
+  "run_id": "override-demo",
+  "modules": [
+    { "id": "git.diff.core", "version": "0.1.0" },
+    { "id": "git.index.controller", "version": "0.1.0" },
+    { "id": "safety.validation", "version": "0.1.0" }
+  ],
+  "wiring": [
+    { "from": "git.diff.core:DiffPort", "to": "orchestrator:DiffPort" },
+    { "from": "safety.validation:SafetyPort", "to": "git.diff.core:SafetyPort" }
+  ],
+  "glue": [],
+  "constraints": [
+    "no-cross-imports",
+    "ports-only-coupling"
+  ]
+}
