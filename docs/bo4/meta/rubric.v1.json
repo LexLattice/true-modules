@@ -1,0 +1,30 @@
+{
+  "version": "1",
+  "weights": {
+    "architecture_clarity": 0.4,
+    "checklist_coverage": 0.3,
+    "novelty": 0.2,
+    "coherence": 0.1
+  },
+  "definitions": {
+    "architecture_clarity": [
+      "Non-empty components_added or components_modified",
+      "Has data_flow",
+      "Has invariants",
+      "Has tradeoffs",
+      "Has alternatives_considered OR open_questions"
+    ],
+    "checklist_coverage": [
+      "Count MUST items implemented; partial gives half credit"
+    ],
+    "novelty": [
+      "Introduces patterns/modules not present in knowledge registry",
+      "Explains tradeoffs new to the project"
+    ],
+    "coherence": [
+      "Paths in components_* appear in the diff patch",
+      "metrics roughly match diff (\u00b110 lines tolerance)"
+    ]
+  },
+  "notes": "Score each facet 0\u2013100 then compute weighted overall."
+}

@@ -10,6 +10,7 @@ examples/winner/package.json
 examples/winner/ports.map.json
 examples/winner/tsconfig.json
 **/.tm/
+variants/
 
 # Rust
 target
@@ -20,5 +21,8 @@ target
 .idea
 .vscode
 .env
+
 artifacts/
 tmp/
+cloud-prompt-*.md
+.codex/

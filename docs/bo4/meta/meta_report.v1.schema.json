@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BO4 Meta-Report v1",
+  "type": "object",
+  "required": [
+    "design_intent_id",
+    "base",
+    "scorecard",
+    "graft_plan"
+  ],
+  "properties": {
+    "design_intent_id": {
+      "type": "string"
+    },
+    "base": {
+      "type": "string"
+    },
+    "scorecard": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "scorecard.variant.v1.template.json"
+      }
+    },
+    "graft_plan": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "item",
+          "from_branch",
+          "to_branch",
+          "method"
+        ],
+        "properties": {
+          "item": {
+            "type": "string"
+          },
+          "from_branch": {
+            "type": "string"
+          },
+          "to_branch": {
+            "type": "string"
+          },
+          "method": {
+            "enum": [
+              "patch",
+              "semantic"
+            ]
+          },
+          "anchors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "path"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "loc": {
+                  "type": "object",
+                  "properties": {
+                    "line_start": {
+                      "type": "integer"
+                    },
+                    "line_end": {
+                      "type": "integer"
+                    }
+                  }
+                },
+                "symbol": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "tests": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "oracles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "risks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

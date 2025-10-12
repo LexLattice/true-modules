@@ -55,6 +55,17 @@ This note documents the workflow we use when Codex CLI (acting as the orchestrat
 - **Watchdog script** – Codex CLI can run a simple shell loop or use a small Rust/Node helper to poll `codex cloud list --json` until completion.
 - **Artifacts** – When harvesting variants, use `codex cloud export` to capture `patch.diff`, `report.json`, and `meta.json`. Version them under `variants/varN/`.
 - **Integration with MCP** – Future iterations can expose this loop via the MCP server so ChatGPT can trigger Codex CLI tasks directly.
+- ** Runbook log** – After kickoff, append a record to `.codex/bo4_runs.jsonl` in the repo with `{ "task_id": "...", "env": "...", "base": "...", "best_of": N, "prompt_file": "..." }`. This metadata drives downstream automation like branch creation and scoring scripts.
+
+## Automation flow snapshot
+
+1. **Kickoff**: prepare the intent doc (prompt, base, best-of) → `codex cloud new --best-of 4 …` and record the task ID/base branch in `.codex/bo4_runs.jsonl`.
+2. **Watch**: poll `codex cloud list --json` periodically until the task status moves from `pending`/`in_progress` to `ready` or `error`.
+3. **Variants sweep**: once `ready`, run `codex cloud show --json --all`; if any variant still reports `pending`/`in_progress`, keep polling `show --json --all` until every variant is terminal (`completed`/`failed`/`cancelled`).
+4. **Branch prep**: for each completed variant, create a local branch from the recorded base and export/cache its diff.
+5. **Apply**: apply each completed variant’s diff (or use `codex cloud diff/apply --variant N`), logging failures separately and skipping failed/cancelled variants.
+6. **Handoff**: emit a brief report summarizing variant statuses, branch names, and apply outcomes; hand off to meta-review for deeper analysis/tests.
+
 
 ## References
 
