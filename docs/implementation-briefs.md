@@ -162,3 +162,49 @@ Wave 2 focuses on making composition deterministic and formalizing telemetry f
 ---
 
 After Wave 2 briefs are approved, hand C4–C5 to Codex Cloud coders. Post-merge, rerun the end-to-end validation (compose → winner composer → gates) and inspect the duplicate-provider and events-out scenarios to confirm behavior.
+
+
+---
+
+# Implementation Briefs — Wave 3 (C6–C7)
+
+Prompt packs equip both implementers and meta reviewers with consistent, self-contained guidance. Wave 3 focuses on formalising those prompts and ensuring the meta planner respects module requirements during selection.
+
+---
+
+## C6 — Implementer Prompt Pack
+
+- **Objective**: deliver a first-party prompt kit that keeps Codex implementers aligned with module schemas, evidence expectations, and checklist discipline.
+- **Key files**: `prompts/implementer/implementer.md` (new), `prompts/implementer/CHECKLIST.md` (new), `docs/getting-started.md` (link the pack), `docs/tests.md` (reference checklist usage).
+- **Implementation steps**:
+  1. **Author the primary prompt** (`prompts/implementer/implementer.md`):
+     - Opening context (what True Modules is, where to work, how to run gates).
+     - Explicit deliverables (module folder, `module.json`, tests, evidence bindings).
+     - Schema references (`/spec/module.schema.json`, `/docs/evidence-bindings.md`, `/docs/tests.md`).
+     - Guardrails (no cross-imports, respect `requires[]`, keep port contracts intact).
+     - Output contract (summaries, tests executed, risks/follow-ups).
+  2. **Publish a checklist** (`prompts/implementer/CHECKLIST.md`): concise list of MUST items (schema fields present, invariants, evidence attachments, gate runs). Reference it from the prompt and the docs.
+  3. **Docs integration**: in `docs/getting-started.md` “Implementer loop” section, add a bullet that links to the new prompt pack and reminds users to copy the checklist into their PR description. Update `docs/tests.md` with a short paragraph describing how the checklist aligns with the event telemetry.
+  4. **Prompt hygiene**: ensure Markdown uses code fences for commands, emphasises deterministic steps (`npm ci`, `node tm.mjs gates shipping`). Provide placeholders for module IDs and evidence citations so Codex can substitute easily.
+- **Acceptance**:
+  - The prompt renders without broken links and contains explicit references to schema, evidence, and tests.
+  - The checklist covers at least schema completion, invariants, `requires[]` satisfaction, gates/test execution, and evidence citations.
+  - `docs/getting-started.md` and `docs/tests.md` mention the new pack so human reviewers know where to find it.
+
+---
+
+## C7 — Meta Prompt Pack++
+
+- **Objective**: upgrade the meta-review prompt and solver so planners evaluate module requirements, duplicate providers, and confidence per goal before BO4 hand-off.
+- **Key files**: `meta/prompts/meta.md`, `tm.mjs` (meta command), `docs/bo4/meta/meta_report.v1.schema.json`, `docs/bo4/meta/rubric.v1.json`, `docs/bo4/templates/variant_report.v1.stub.json`.
+- **Implementation steps**:
+  1. **Prompt updates** (`meta/prompts/meta.md`): call out the evaluation goals (architecture clarity, checklist coverage, novelty, coherence), require evidence bindings per claim, require explicit confidence scores, and remind reviewers to check `requires[]` satisfaction and duplicate providers before selecting a winner.
+  2. **Solver enhancement** (`tm.mjs meta`): add a `--respect-requires` flag. When enabled, compute the set of satisfied requirements based on the coverage JSON; penalise or exclude modules whose `requires[]` cannot be met by the chosen set (e.g., drop gain to `-inf` or subtract a large weight). Document the flag in the CLI usage string.
+  3. **Rubric alignment**: extend `docs/bo4/meta/rubric.v1.json` with a note on penalising unmet `requires[]` and duplicate providers; update the template (`docs/bo4/templates/variant_report.v1.stub.json`) so the meta report explicitly records confidence per goal and rationale for discarded variants.
+  4. **Schema tweak** (if necessary): ensure `docs/bo4/meta/meta_report.v1.schema.json` permits new fields (e.g., `confidence` per decision) or tighten descriptions so the prompt-to-report loop stays consistent.
+  5. **Examples/testing**: run `node tm.mjs meta --coverage ./examples/coverage.json --respect-requires --out ./examples/compose.greedy.json` and confirm the resulting plan excludes modules with unsatisfied requirements. Capture a before/after diff in the PR description.
+- **Acceptance**:
+  - Updated prompt emphasises requirements checks, duplicate-provider handling, and evidence-backed scoring.
+  - With `--respect-requires`, the greedy meta planner no longer selects modules whose `requires[]` cannot be fulfilled by the current goal set.
+  - The rubric/template/schema stay consistent with the prompt (confidence, rationale, rejected alternatives fields present).
+  - Example coverage run succeeds and produces a valid `compose.greedy.json` without unmet dependencies.
