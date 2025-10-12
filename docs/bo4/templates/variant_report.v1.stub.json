@@ -50,7 +50,11 @@
             "option": "Select git.diff.core@var4",
             "rationale": "Best evidence on diff strategy and integrates with SafetyPort",
             "rejected_alternatives": [
-                "git.diff.alt@var3 (SafetyPort dependency unmet)"
+                {
+                    "variant": "git.diff.alt@var3",
+                    "reason": "SafetyPort dependency unmet",
+                    "confidence": 0.3
+                }
             ]
         }
     ],
@@ -63,7 +67,11 @@
             ],
             "confidence": 0.7,
             "rejected_alternatives": [
-                "worktree.manager@var2 (lacked integration tests)"
+                {
+                    "variant": "worktree.manager@var2",
+                    "reason": "lacked integration tests",
+                    "confidence": 0.4
+                }
             ]
         }
     ],

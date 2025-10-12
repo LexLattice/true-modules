@@ -512,11 +512,29 @@ program
 
           if (!provider) {
             const availableCandidates = [...candidates].filter(c => available.has(c));
-            if (availableCandidates.length !== 1) {
+            if (availableCandidates.length === 0) {
               visiting.delete(id);
               return false;
             }
-            provider = availableCandidates[0];
+
+            let bestProvider = null;
+            let bestScore = Number.NEGATIVE_INFINITY;
+            for (const cand of availableCandidates) {
+              const candInfo = moduleInfo.get(cand);
+              if (!candInfo) continue;
+              const score = (candInfo.ev * 0.5) - candInfo.risk;
+              if (score > bestScore) {
+                bestScore = score;
+                bestProvider = cand;
+              }
+            }
+
+            if (!bestProvider) {
+              visiting.delete(id);
+              return false;
+            }
+
+            provider = bestProvider;
           }
 
           if (!dfs(provider)) {
@@ -548,6 +566,9 @@ program
       let gsum = 0;
       let riskPenalty = 0;
       let evidenceBonus = 0;
+      let duplicatePenalty = 0;
+      const bundlePorts = new Set();
+
       for (const id of bundle.modules) {
         const info = moduleInfo.get(id);
         if (!info) continue;
@@ -556,9 +577,14 @@ program
         }
         riskPenalty += info.risk;
         evidenceBonus += info.ev * 0.5;
+
+        for (const port of info.provides) {
+          if (selectedPorts.has(port) || bundlePorts.has(port)) duplicatePenalty += 1;
+          bundlePorts.add(port);
+        }
       }
 
-      return { gain: gsum + evidenceBonus - riskPenalty, modules: bundle.modules };
+      return { gain: gsum + evidenceBonus - riskPenalty - duplicatePenalty, modules: bundle.modules };
     }
 
     while (available.size > 0) {

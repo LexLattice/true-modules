@@ -47,7 +47,25 @@
           "rejected_alternatives": {
             "type": "array",
             "items": {
-              "type": "string"
+              "type": "object",
+              "required": [
+                "variant",
+                "reason"
+              ],
+              "properties": {
+                "variant": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "confidence": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              },
+              "additionalProperties": false
             }
           }
         },
@@ -89,7 +107,25 @@
           "rejected_alternatives": {
             "type": "array",
             "items": {
-              "type": "string"
+              "type": "object",
+              "required": [
+                "variant",
+                "reason"
+              ],
+              "properties": {
+                "variant": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "confidence": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              },
+              "additionalProperties": false
             }
           }
         },
