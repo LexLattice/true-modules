@@ -55,3 +55,4 @@ For each goal:
 ## Output formatting rules
 - Emit **pure JSON** for `coverage.json` and `compose.json` (no prose).
 - Emit `report.json` in the unified schema for narrative + decisions.
+- After the winner is selected and merged, append the key outcomes (winner, imports, residual risks, follow-ups) to `docs/meta-history.md` so future reviewers inherit the context.
