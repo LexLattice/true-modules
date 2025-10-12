@@ -210,3 +210,51 @@ Prompt packs equip both implementers and meta reviewers with consistent, self-co
   - With `--respect-requires`, the greedy meta planner no longer selects modules whose `requires[]` cannot be fulfilled by the current goal set.
   - The rubric/template/schema stay consistent with the prompt (confidence, rationale, rejected alternatives fields present).
   - Example coverage run succeeds and produces a valid `compose.greedy.json` without unmet dependencies.
+
+---
+
+# Implementation Briefs — Wave 4 (C8–C10)
+
+Wave 4 continues the post-review polish: mine residual lessons, expand cross-platform safety coverage, and ensure winners can pass a packaging smoke test. Handle C8–C10 in one combined effort so tooling, docs, and fixtures stay in sync.
+
+---
+
+## C8–C10 — Lessons Miner · SafetyPort Pack · Winner Pack Smoke
+
+- **Objective**: surface residual risks and follow-ups as durable lessons, harden SafetyPort across Windows path edge cases, and add an optional packaging smoke test for composed winners.
+- **Key files**: `tm.mjs`, `docs/lessons.md` (new), `docs/tests.md`, `examples/modules/safety.validation/tests/spec_paths_windows.json`, `examples/modules/safety.validation/tests/run_win_cases.mjs`, `runtimes/ts/composer/index.mjs`, `docs/composer.md`, `package.json` (optional script wiring).
+- **Implementation steps**:
+  1. **Lessons miner command** (`tm.mjs lessons mine`):
+     - Accept `--from <glob …>` (one or many) and `--out <file>`.
+     - Load each matching `report.json` (implementer, meta, winner), gather `followups[]` and `residual_risks[]`, normalise strings, and deduplicate entries.
+     - Emit `{ "followups": [...], "residual_risks": [...] }`; running the command twice over the same inputs must produce identical output (idempotent).
+     - Warn (but continue) when a file is missing or malformed; only hard-fail when no reports could be read.
+  2. **Lessons documentation**:
+     - Author `docs/lessons.md` summarising the miner, the expected JSON shape, sample commands (e.g., `node tm.mjs lessons mine --from "docs/**/*.json" --out lessons.json`), and guidance on cross-linking to `docs/meta-history.md`.
+     - Optional: expose a convenience npm script (e.g., `"lessons": "node tm.mjs lessons mine --from \\\"docs/**/*.json winner/report.json\\\" --out lessons.json"`).
+  3. **Examples & verification**:
+     - Drop a handful of sample reports under `examples/lessons/` or reuse existing docs; add a README note or fixture output demonstrating the merged lessons file.
+  4. **SafetyPort Windows test pack**:
+     - Create `examples/modules/safety.validation/tests/spec_paths_windows.json` covering Windows/WSL path quirks.
+     - Author `run_win_cases.mjs` that executes those cases; it must exit 0 with a “SKIP” message when `process.platform !== "win32"` but perform real assertions on Windows.
+     - Update any local `package.json` or docs so the script can be invoked (`node run_win_cases.mjs`); ensure tests integrate with existing gating (no manual wiring required on non-Windows).
+     - Add a short “Platform-conditional tests” subsection to `docs/tests.md`, explaining how to invoke the Windows pack and how skips appear in CI.
+  5. **Winner packaging smoke**:
+     - Extend `runtimes/ts/composer/index.mjs` to emit a minimal `winner/package.json` (mark `"private": true`; include name/version gleaned from the compose run).
+     - In `tm.mjs gates shipping`, add `--npm-pack`: after gates succeed, run `npm pack` inside `winner/`, capture output, and always delete the generated tarball.
+     - If `npm` is unavailable, surface a warning and skip the smoke instead of crashing.
+     - Failures should bubble as `GATES_FAIL { "error": "npm_pack_failed", ... }` with the first few diagnostics.
+     - Update `docs/composer.md` with a “Packaging smoke” section describing the flag, artifacts, and cleanup behaviour.
+  6. **Validation checklist**:
+     - Run `node tm.mjs lessons mine --from "docs/report.json" --out tmp/lessons.json` (and against sample fixtures) to confirm deduping.
+     - Execute the Windows SafetyPort script on both Linux/macOS (verify skip) and Windows (real assertions).
+     - Compose the sample modules and run `node tm.mjs gates shipping --compose examples/compose.greedy.json --modules-root examples/modules --npm-pack`, ensuring the tarball is produced then removed.
+- **Acceptance**:
+  - Lessons miner produces stable, deduplicated output and handles missing files gracefully.
+  - SafetyPort Windows tests skip cleanly on non-Windows hosts and execute on Windows without breaking existing gates.
+  - `--npm-pack` succeeds for the examples; failures surface actionable messaging and clean up temp artifacts.
+  - Documentation additions (`docs/lessons.md`, `docs/tests.md`, `docs/composer.md`) match the implemented behaviour and point to the new commands/scripts.
+
+After landing, run the end-to-end compose → winner → shipping flow with `--npm-pack`, generate fresh lessons via the miner, and record key follow-ups in `docs/meta-history.md`.
+
+---
