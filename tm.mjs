@@ -6,8 +6,6 @@ import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
-import globModule from 'glob';
-import { promisify } from 'util';
 import { spawn } from 'child_process';
 import crypto from 'crypto';
 import { collectCrossImportDiagnostics } from './scripts/eslint-run.mjs';
@@ -21,8 +19,6 @@ const program = new Command();
 program.name('tm').description('True Modules CLI (scaffold)').version(CLI_VERSION);
 
 const specDir = path.join(__dirname, 'spec');
-const glob = promisify(typeof globModule === 'function' ? globModule : globModule.glob);
-
 async function loadJSON(p) {
   const txt = await fs.readFile(p, 'utf8');
   try { return JSON.parse(txt); } catch (e) {
@@ -108,138 +104,6 @@ function verifyPortRequires(compose, manifestsById) {
     }
   }
   return problems;
-}
-
-
-
-// ---- lessons miner helpers ----
-// ---- lessons miner helpers ----
-function normalizeStringValue(value) {
-  return value.replace(/\s+/g, ' ').trim();
-}
-
-function normalizeEntry(value) {
-  if (value === null || value === undefined) return null;
-  if (typeof value === 'string') {
-    const normalized = normalizeStringValue(value);
-    return normalized.length ? normalized : null;
-  }
-  if (Array.isArray(value)) {
-    const normalizedArray = value
-      .map(normalizeEntry)
-      .filter(entry => entry !== null);
-    return normalizedArray.length ? normalizedArray : null;
-  }
-  if (typeof value === 'object') {
-    const entries = Object.entries(value)
-      .map(([key, val]) => [key, normalizeEntry(val)])
-      .filter(([, val]) => val !== null);
-    entries.sort((a, b) => a[0].localeCompare(b[0]));
-    const out = {};
-    for (const [key, val] of entries) out[key] = val;
-    return Object.keys(out).length ? out : null;
-  }
-  const stringified = String(value);
-  const normalized = normalizeStringValue(stringified);
-  return normalized.length ? normalized : null;
-}
-
-function canonicalKeyForEntry(entry) {
-  if (typeof entry === 'string') return `str:${entry}`;
-  return `obj:${JSON.stringify(entry)}`;
-}
-
-function finalizeEntries(map) {
-  return Array.from(map.entries())
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([, value]) => value);
-}
-
-async function resolveLessonFiles(patterns) {
-  const files = new Set();
-  for (const pattern of patterns) {
-    if (!pattern) continue;
-    let matches = [];
-    try {
-      matches = await glob(pattern, { cwd: process.cwd(), absolute: true, nodir: true });
-    } catch (err) {
-      console.warn(`[lessons] Failed glob for pattern ${pattern}: ${err.message}`);
-      continue;
-    }
-    if (matches.length === 0) {
-      console.warn(`[lessons] Pattern ${pattern} matched no files.`);
-    }
-    for (const match of matches) {
-      if (path.basename(match) !== 'report.json') continue;
-      files.add(path.resolve(match));
-    }
-  }
-  return Array.from(files).sort((a, b) => a.localeCompare(b));
-}
-
-function extractArrayCandidate(obj, keys, relPath) {
-  for (const key of keys) {
-    if (Object.prototype.hasOwnProperty.call(obj, key)) {
-      const val = obj[key];
-      if (!Array.isArray(val)) {
-        console.warn(`[lessons] ${relPath} field "${key}" is not an array; skipping.`);
-        return [];
-      }
-      return val;
-    }
-  }
-  return [];
-}
-
-async function mineLessons(patterns, outFile) {
-  const files = await resolveLessonFiles(patterns);
-  const followupMap = new Map();
-  const residualMap = new Map();
-  let readable = 0;
-
-  for (const file of files) {
-    let data;
-    try {
-      data = JSON.parse(await fs.readFile(file, 'utf8'));
-      readable += 1;
-    } catch (err) {
-      const rel = path.relative(process.cwd(), file);
-      console.warn(`[lessons] Failed to load ${rel}: ${err.message}`);
-      continue;
-    }
-
-    const rel = path.relative(process.cwd(), file);
-    const followups = extractArrayCandidate(data, ['followups', 'followUps'], rel);
-    const residuals = extractArrayCandidate(data, ['residual_risks', 'residualRisks'], rel);
-
-    for (const entry of followups) {
-      const normalized = normalizeEntry(entry);
-      if (normalized === null) continue;
-      const key = canonicalKeyForEntry(normalized);
-      if (!followupMap.has(key)) followupMap.set(key, normalized);
-    }
-
-    for (const entry of residuals) {
-      const normalized = normalizeEntry(entry);
-      if (normalized === null) continue;
-      const key = canonicalKeyForEntry(normalized);
-      if (!residualMap.has(key)) residualMap.set(key, normalized);
-    }
-  }
-
-  if (readable === 0) {
-    throw tmError('E_LESSONS_NO_REPORTS', 'No readable report.json files found for provided patterns.');
-  }
-
-  const lessons = {
-    followups: finalizeEntries(followupMap),
-    residual_risks: finalizeEntries(residualMap)
-  };
-
-  const outPath = path.resolve(outFile);
-  await fs.mkdir(path.dirname(outPath), { recursive: true });
-  await fs.writeFile(outPath, JSON.stringify(lessons, null, 2) + '\\n');
-  console.log(`✓ Lessons mined -> ${outPath}`);
 }
 
 async function dirExists(p) {
@@ -781,54 +645,6 @@ function npmInvocation() {
     return { cmd: process.execPath, args: [execPath, 'pack'] };
   }
   return { cmd: 'npm', args: ['pack'] };
-}
-
-async function npmPackSmoke(winnerDir) {
-  const pkgPath = path.join(winnerDir, 'package.json');
-  await fs.access(pkgPath);
-  const beforeEntries = await fs.readdir(winnerDir);
-  const beforeTarballs = new Set(beforeEntries.filter(name => name.endsWith('.tgz')));
-  const invocation = npmInvocation();
-  let result;
-  try {
-    result = await runCmd(invocation.cmd, invocation.args, { cwd: winnerDir, timeoutMs: 120_000 });
-  } catch (err) {
-    const spawnCode = err?.cause?.code || err?.code;
-    if (spawnCode === 'ENOENT' || spawnCode === 'ERR_SPAWN') {
-      const missing = new Error('npm executable not available');
-      missing.code = 'ERR_NPM_MISSING';
-      missing.cause = err;
-      throw missing;
-    }
-    throw err;
-  }
-
-  const afterEntries = await fs.readdir(winnerDir);
-  const afterTarballs = afterEntries.filter(name => name.endsWith('.tgz'));
-  const newTarballs = afterTarballs.filter(name => !beforeTarballs.has(name));
-  let tarballName = newTarballs[0] || null;
-
-  if (!tarballName) {
-    const combined = `${result.out || ''}\n${result.err || ''}`;
-    const match = combined.match(/([^\s]+\.tgz)/);
-    if (match) tarballName = match[1];
-  }
-
-  if (!tarballName) {
-    const err = new Error('npm pack completed but no tarball was detected');
-    err.code = 'ERR_NPM_NO_TARBALL';
-    err.stdout = result.out;
-    err.stderr = result.err;
-    throw err;
-  }
-
-  const cleanupTargets = new Set(newTarballs.length ? newTarballs : [tarballName]);
-  for (const name of cleanupTargets) {
-    const target = path.join(winnerDir, name);
-    await fs.unlink(target).catch(() => {});
-  }
-
-  return { tarball: tarballName, stdout: result.out, stderr: result.err };
 }
 
 const lessonsCmd = program
