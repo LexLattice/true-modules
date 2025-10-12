@@ -1,0 +1,21 @@
+{
+  "context": { "run_id": "impl-demo" },
+  "followups": [
+    {
+      "title": "Backfill Windows-specific regression cases",
+      "priority": "P1",
+      "owner": "safety",
+      "pointer": "examples/modules/safety.validation/tests/spec_paths_windows.json"
+    },
+    {
+      "title": "Document lessons miner in contributor playbook",
+      "priority": "P2",
+      "owner": "docs",
+      "pointer": "docs/contributor-playbook.md"
+    }
+  ],
+  "residual_risks": [
+    "SafetyPort normalization treats UNC paths as safe",
+    "Manual lessons collation drifts without automation"
+  ]
+}

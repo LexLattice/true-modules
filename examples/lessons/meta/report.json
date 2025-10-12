@@ -1,0 +1,21 @@
+{
+  "context": { "run_id": "meta-demo" },
+  "followups": [
+    {
+      "title": "Backfill Windows-specific regression cases",
+      "priority": "P1",
+      "owner": "safety",
+      "pointer": "docs/meta-history.md#2024-09-15"
+    },
+    {
+      "title": "Archive pack artifacts for postmortems",
+      "priority": "P3",
+      "owner": "release",
+      "pointer": "docs/meta-history.md#2024-09-15"
+    }
+  ],
+  "residual_risks": [
+    "Manual lessons collation drifts without automation",
+    "Composer output lacks package metadata"
+  ]
+}

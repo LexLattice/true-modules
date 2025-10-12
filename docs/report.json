@@ -1,47 +1,97 @@
 {
-  "summary": "Updated the meta reviewer guidance and planner to enforce module dependency discipline and confidence reporting.",
+  "summary": "Implemented lessons aggregation tooling, Windows-specific SafetyPort verification, and optional npm packaging smoke for shipping gates.",
   "checklist": [
     {
-      "id": "C7",
+      "id": "P1",
       "status": "implemented",
-      "notes": "Meta prompt, solver, and docs now cover requires[] checks and confidence capture."
+      "notes": "Added tm lessons miner CLI, SafetyPort Windows fixtures, and npm pack smoke option in shipping gates."
     }
   ],
   "architecture": {
-    "components_added": [],
-    "components_modified": [],
-    "data_flow": "Coverage metadata (provides_ports/requires) now feeds the meta CLI scorer before greedy selection.",
-    "state_management": "The meta CLI stores selected module ports and requirements in sets while evaluating gains.",
+    "components_added": [
+      {
+        "name": "Lessons fixtures",
+        "path": "examples/lessons",
+        "role": "workflow"
+      },
+      {
+        "name": "SafetyPort Windows runner",
+        "path": "examples/modules/safety.validation/tests/run_win_cases.mjs",
+        "role": "workflow"
+      }
+    ],
+    "components_modified": [
+      {
+        "path": "tm.mjs",
+        "reason": "Added lessons miner command and npm pack smoke handling in shipping gates."
+      },
+      {
+        "path": "examples/modules/safety.validation/src/index.ts",
+        "reason": "Normalized Windows paths and tightened safety checks."
+      },
+      {
+        "path": "runtimes/ts/composer/index.mjs",
+        "reason": "Emit winner/package.json derived from compose metadata."
+      }
+    ],
+    "data_flow": "Lessons miner ingests report.json files via glob patterns, normalizes followups/residual_risks, and writes a deterministic merged JSON artifact while gates optionally shell out to npm pack after tests complete.",
+    "state_management": "Lessons aggregation relies on in-memory Sets/Maps for deduplication; gate summaries now persist npm_pack status alongside existing run metadata.",
     "invariants": [
-      "Coverage entries include provides_ports and requires arrays when dependencies exist.",
-      "When --respect-requires is enabled the planner never selects a module without a satisfied provider."
+      "Lessons miner output remains sorted and deduplicated across repeated runs."
     ],
     "tradeoffs": [
-      "Skipping modules until dependencies are satisfied may leave some goals uncovered if providers are missing, but avoids unsafe plans."
+      "Custom glob expansion avoids new dependencies but covers only the needed pattern set."
     ],
     "alternatives_considered": [
       {
-        "option": "Penalize unmet requires with a smaller score deduction",
-        "rejected_because": "Deterministically excluding modules keeps the greedy heuristic predictable and dependency-safe."
+        "option": "Depend on glob package",
+        "rejected_because": "Environment is offline and existing tooling suffices for the required patterns"
       }
     ],
     "open_questions": [
-      "Should the planner discover manifests automatically when coverage omits provides_ports metadata?"
+      "Confirm npm pack smoke and SafetyPort cases on a native Windows host."
     ]
   },
   "tests": {
-    "added": [],
-    "how_to_run": "node tm.mjs meta --coverage ./examples/coverage.json --respect-requires --out ./examples/compose.greedy.json"
+    "added": [
+      "examples/modules/safety.validation/tests/run_win_cases.mjs"
+    ],
+    "how_to_run": "node tm.mjs gates shipping --compose examples/compose.greedy.json --modules-root examples/modules --npm-pack"
   },
   "metrics": {
-    "files_changed": 11,
-    "insertions": 239,
-    "deletions": 58
+    "files_changed": 16,
+    "insertions": 870,
+    "deletions": 16
   },
+  "decisions": [
+    {
+      "option": "Manual glob walker inside lessons miner",
+      "rationale": "Keeps CLI self-contained without fetching additional packages.",
+      "rejected_alternatives": [
+        {
+          "variant": "Use glob dependency",
+          "reason": "Unavailable offline and unnecessary for the supported patterns",
+          "confidence": 0.4
+        }
+      ]
+    }
+  ],
   "risks": [
-    "Coverage producers that skip provides_ports/requires may see modules dropped under --respect-requires."
+    "Windows-only SafetyPort logic could still miss niche device path formats."
+  ],
+  "residual_risks": [
+    "npm pack smoke is skipped when npm is absent, so downstream packaging issues could hide on such hosts."
+  ],
+  "followups": [
+    {
+      "title": "Exercise SafetyPort Windows pack on CI",
+      "priority": "P1",
+      "owner": "platform",
+      "pointer": "examples/modules/safety.validation/tests/run_win_cases.mjs"
+    }
   ],
   "todos": [
-    "Consider adding manifest discovery so --respect-requires can infer ports without annotated coverage."
-  ]
+    "Extend lessons miner to attribute followups to their originating reports."
+  ],
+  "confidence": 0.6
 }

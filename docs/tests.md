@@ -59,3 +59,13 @@ When `.ts`/`.tsx` files are present under `modules/` or `glue/`:
 ## Cross-import linting
 
 Shipping relies on a local ESLint rule that forbids module-to-module imports. Install `eslint` and `@typescript-eslint/parser` in your workspace (`npm i -D eslint @typescript-eslint/parser`). `tm gates` prefers ESLint and emits `lint_failed` errors when violations occur. If ESLint is unavailable, gates fall back to the legacy regex scan and emit a warning (`eslint_unavailable`); fix the reported import path and rerun.
+
+## Platform-conditional tests
+
+Some modules provide additional packs that only execute on specific platforms. For example, the SafetyPort module ships a Windows-only harness:
+
+```bash
+node examples/modules/safety.validation/tests/run_win_cases.mjs
+```
+
+When invoked on Linux or macOS, the script prints `SKIP SafetyPort Windows cases (platform: ...)` and exits with status `0` so CI remains green. On Windows machines it transpiles `src/index.ts` on the fly and asserts the path normalization and safety guards declared in `tests/spec_paths_windows.json`.

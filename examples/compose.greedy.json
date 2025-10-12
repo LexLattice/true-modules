@@ -1,20 +1,16 @@
 {
-  "run_id": "2025-10-12T13:29:29.856Z",
+  "run_id": "2025-10-12T15:42:05.765Z",
   "modules": [
-    {
-      "id": "safety.validation",
-      "version": "0.1.0"
-    },
     {
       "id": "git.diff.core",
       "version": "0.1.0"
     },
     {
-      "id": "worktree.manager",
+      "id": "git.index.controller",
       "version": "0.1.0"
     },
     {
-      "id": "git.index.controller",
+      "id": "safety.validation",
       "version": "0.1.0"
     }
   ],

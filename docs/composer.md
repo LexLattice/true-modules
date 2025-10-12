@@ -18,6 +18,26 @@ Add wiring from orchestrator or constraint prefer:DiffPort@1=git.diff.alt.
 The same policy is enforced by the TypeScript MVP composer under
 `runtimes/ts/composer`.
 
+## Packaging smoke
+
+Pass `--npm-pack` to `tm gates shipping` to run a lightweight packaging smoke
+test after the shipping gates succeed:
+
+```bash
+node tm.mjs gates shipping --compose examples/compose.greedy.json \
+  --modules-root examples/modules --npm-pack
+```
+
+- The TypeScript composer now writes `winner/package.json` using the compose
+  `run_id` to derive a unique name and pre-release version.
+- When `--npm-pack` is set, the gates invoke `npm pack` inside the winner
+  workspace, capture the emitted tarball name, and immediately delete the
+  archive so it does not pollute the working tree.
+- If `npm` is unavailable on the host, gates emit a warning and mark the smoke
+  check as skipped instead of failing the run.
+- Failures bubble up as `GATES_FAIL` events with `error: "npm_pack_failed"` and
+  the first few diagnostics from `npm`.
+
 ## Resolving conflicts
 
 You can disambiguate by wiring the orchestrator to the desired provider:

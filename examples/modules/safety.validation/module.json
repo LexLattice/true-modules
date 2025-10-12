@@ -14,7 +14,8 @@
     "no external processes"
   ],
   "tests": [
-    "tests/spec_paths.json"
+    "tests/spec_paths.json",
+    "script:tests/run_win_cases.mjs"
   ],
   "port_exports": {
     "SafetyPort@1": { "file": "src/index.ts", "export": "safetyPort" }

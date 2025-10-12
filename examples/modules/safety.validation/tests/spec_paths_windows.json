@@ -1,0 +1,27 @@
+{
+  "name": "windows-paths",
+  "normalize": [
+    {
+      "input": "C:/Users/Alice//Projects\\app",
+      "expect": "C:\\Users\\Alice\\Projects\\app"
+    },
+    {
+      "input": "/mnt/c/Users/Alice/Workspace",
+      "expect": "C:\\Users\\Alice\\Workspace"
+    },
+    {
+      "input": "C:\\Users\\Alice\\..\\Bob\\Repo",
+      "expect": "C:\\Users\\Bob\\Repo"
+    }
+  ],
+  "safe": [
+    { "path": "C:\\Users\\Alice\\Projects\\app", "expected": true },
+    { "path": "/mnt/c/Users/Alice/Workspace", "expected": true }
+  ],
+  "unsafe": [
+    "C:\\Windows\\System32\\..\\..\\Windows",
+    "\\\\server\\share\\payload.txt",
+    "C:\\Temp\\CON",
+    "relative\\path\\file.txt"
+  ]
+}
