@@ -1,0 +1,26 @@
+{
+  "summary": "Documented the implementer workflow with a prompt pack and checklist so teams can align modules with gates and evidence later.",
+  "checklist": [
+    {"id": "P1", "status": "implemented", "notes": "Added prompt pack, checklist, and surfaced both in onboarding docs."}
+  ],
+  "architecture": {
+    "components_added": [],
+    "components_modified": [],
+    "data_flow": "Documentation-only change; no runtime producers or consumers added.",
+    "state_management": "No code paths modified; state handling unchanged.",
+    "invariants": [
+      "Prompt and checklist links use stable relative paths to specs and docs."
+    ],
+    "tradeoffs": [
+      "Kept guidance concise for readability, leaving deeper examples to existing docs."
+    ],
+    "alternatives_considered": [],
+    "open_questions": [
+      "Should we automate reminders to complete the checklist telemetry?"
+    ]
+  },
+  "tests": {"added": [], "how_to_run": "node tm.mjs gates shipping --emit-events --strict-events"},
+  "metrics": {"files_changed": 5, "insertions": 111, "deletions": 0},
+  "risks": ["Documentation may fall out of sync with schema or gate updates."],
+  "todos": ["Collect implementer feedback after the prompt pack ships."]
+}

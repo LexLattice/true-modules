@@ -13,6 +13,7 @@
 3. Implement code behind the port(s) you declare in `provides`.
 4. Include tests and evidence bindings in `module.json`.
 5. Keep coupling via **ports** only (no cross-imports).
+6. Review the [Implementer Prompt Pack](../prompts/implementer/implementer.md) and [Implementer Checklist](../prompts/implementer/CHECKLIST.md) before coding.
 
 ## Compose plan
 

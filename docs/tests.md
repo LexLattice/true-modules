@@ -45,6 +45,8 @@ process.exit(0);
 
 This simple contract keeps shipping gates portable while allowing richer module-specific assertions as your workflow evolves.
 
+Refer to the [Implementer Checklist](../prompts/implementer/CHECKLIST.md) for the MUST-have validation steps. Checking those boxes ensures your local runs of `node tm.mjs gates shipping --emit-events --strict-events` produce the telemetry events (`gate_passed`, `test_passed`, `evidence_linked`) that downstream tooling expects.
+
 ## Type-checking (TypeScript)
 
 When `.ts`/`.tsx` files are present under `modules/` or `glue/`:
