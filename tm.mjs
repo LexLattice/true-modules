@@ -9,6 +9,7 @@ import addFormats from 'ajv-formats';
 import { spawn } from 'child_process';
 import crypto from 'crypto';
 import { collectCrossImportDiagnostics } from './scripts/eslint-run.mjs';
+import { tmError, analyzeProviders } from './scripts/lib/provider-analysis.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,202 +31,6 @@ function makeAjv() {
   const ajv = new Ajv2020({ allErrors: true, strict: false });
   addFormats(ajv);
   return ajv;
-}
-
-function tmError(code, message) {
-  const err = new Error(`${code} ${message}`);
-  err.code = code;
-  return err;
-}
-
-function parsePortId(portId) {
-  const [name, rawVersion] = String(portId || '').split('@');
-  const versionPart = rawVersion && rawVersion.length ? rawVersion : '1';
-  const major = versionPart.split('.')[0] || '1';
-  return { name, version: versionPart, major };
-}
-
-function portMajorId(portId) {
-  const info = parsePortId(portId);
-  if (!info.name) throw tmError('E_COMPOSE', `Invalid port identifier: ${portId}`);
-  return `${info.name}@${info.major}`;
-}
-
-function portName(portId) {
-  return parsePortId(portId).name;
-}
-
-function parseWiringEndpoint(entry) {
-  const [module, port] = String(entry || '').split(':');
-  if (!module || !port) {
-    throw tmError('E_COMPOSE', `Invalid wiring endpoint: ${entry}`);
-  }
-  return { module, port };
-}
-
-function extractPreferredProviders(constraints) {
-  const preferred = new Map();
-  for (const constraint of constraints || []) {
-    if (!constraint) continue;
-    if (typeof constraint === 'string') {
-      const trimmed = constraint.trim();
-      const match = /^prefer:([A-Za-z][A-Za-z0-9]*Port@\d+)=([a-z][a-z0-9_.-]+)$/.exec(trimmed);
-      if (match) {
-        const [, port, module] = match;
-        const prev = preferred.get(port);
-        if (prev && prev !== module) {
-          throw tmError('E_PREFER_UNSAT', `Conflicting preferred providers for ${port}: ${prev} vs ${module}`);
-        }
-        preferred.set(port, module);
-      }
-      continue;
-    }
-    if (typeof constraint === 'object' && !Array.isArray(constraint)) {
-      if (constraint.preferred_providers && typeof constraint.preferred_providers === 'object') {
-        for (const [port, module] of Object.entries(constraint.preferred_providers)) {
-          if (typeof module !== 'string') continue;
-          if (!/^[A-Za-z][A-Za-z0-9]*Port@\d+$/.test(port)) continue;
-          if (!/^[a-z][a-z0-9_.-]+$/.test(module)) continue;
-          const prev = preferred.get(port);
-          if (prev && prev !== module) {
-            throw tmError('E_PREFER_UNSAT', `Conflicting preferred providers for ${port}: ${prev} vs ${module}`);
-          }
-          preferred.set(port, module);
-        }
-      }
-    }
-  }
-  return preferred;
-}
-
-function analyzeProviders(compose, moduleEntries) {
-  const infoMap = new Map();
-  const modulePortIndex = new Map();
-  const moduleIds = new Set(Object.keys(moduleEntries));
-
-  for (const [moduleId, entry] of Object.entries(moduleEntries)) {
-    const manifest = entry.manifest;
-    const provides = manifest.provides || [];
-    const portMap = new Map();
-    for (const portId of provides) {
-      const major = portMajorId(portId);
-      const name = portName(portId);
-      if (!infoMap.has(major)) {
-        infoMap.set(major, {
-          port: major,
-          providers: new Set(),
-          chosen: null,
-          reason: null
-        });
-      }
-      infoMap.get(major).providers.add(moduleId);
-      if (!portMap.has(name)) portMap.set(name, []);
-      portMap.get(name).push(major);
-    }
-    modulePortIndex.set(moduleId, portMap);
-  }
-
-  const preferred = extractPreferredProviders(compose.constraints || []);
-
-  for (const [port, moduleId] of preferred.entries()) {
-    if (!infoMap.has(port)) {
-      throw tmError('E_PREFER_UNSAT', `Preferred provider for ${port} not present in compose plan.`);
-    }
-    if (!moduleIds.has(moduleId)) {
-      throw tmError('E_PREFER_UNSAT', `Preferred provider ${moduleId} for ${port} is not part of the compose modules.`);
-    }
-    const info = infoMap.get(port);
-    if (!info.providers.has(moduleId)) {
-      throw tmError('E_PREFER_UNSAT', `Preferred provider ${moduleId} does not supply ${port}.`);
-    }
-  }
-
-  for (const w of compose.wiring || []) {
-    const from = parseWiringEndpoint(w.from);
-    const to = parseWiringEndpoint(w.to);
-    let moduleId = null;
-    let portKey = null;
-    if (from.module !== 'orchestrator' && to.module === 'orchestrator') {
-      moduleId = from.module;
-      portKey = from.port;
-    } else if (to.module !== 'orchestrator' && from.module === 'orchestrator') {
-      moduleId = to.module;
-      portKey = to.port;
-    } else {
-      continue;
-    }
-    if (!moduleEntries[moduleId]) continue;
-    const portMap = modulePortIndex.get(moduleId) || new Map();
-    const matches = portMap.get(portKey) || [];
-    if (matches.length === 0) {
-      throw tmError('E_COMPOSE', `Module ${moduleId} does not provide port ${portKey}`);
-    }
-    if (matches.length > 1) {
-      throw tmError('E_COMPOSE', `Module ${moduleId} provides multiple majors for port ${portKey}; wiring must disambiguate via constraints.`);
-    }
-    const major = matches[0];
-    const info = infoMap.get(major);
-    if (!info) continue;
-    if (info.chosen && info.chosen !== moduleId) {
-      throw tmError('E_DUP_PROVIDER', `Conflicting wiring for ${major}: ${info.chosen} vs ${moduleId}`);
-    }
-    info.chosen = moduleId;
-    info.reason = 'wired';
-  }
-
-  for (const [port, moduleId] of preferred.entries()) {
-    const info = infoMap.get(port);
-    if (!info) continue;
-    if (info.reason === 'wired') {
-      if (info.chosen !== moduleId) {
-        console.warn(`Preference for ${port}=${moduleId} ignored due to wiring selecting ${info.chosen}.`);
-      }
-      continue;
-    }
-    info.chosen = moduleId;
-    info.reason = 'preferred';
-  }
-
-  const unresolved = [];
-  for (const info of infoMap.values()) {
-    info.providers = Array.from(info.providers).sort();
-    if (!info.chosen) {
-      if (info.providers.length === 1) {
-        info.chosen = info.providers[0];
-        info.reason = 'sole';
-      } else if (info.providers.length > 1) {
-        unresolved.push(info);
-      }
-    }
-  }
-
-  if (unresolved.length > 0) {
-    const target = unresolved.sort((a, b) => a.port.localeCompare(b.port))[0];
-    const msg = `Duplicate providers for ${target.port}: ${target.providers.join(', ')}.\nAdd wiring from orchestrator or constraint prefer:${target.port}=${target.providers[0]}.`;
-    throw tmError('E_DUP_PROVIDER', msg);
-  }
-
-  const warnings = [];
-  const explanations = Array.from(infoMap.values())
-    .map(info => {
-      if (info.reason === 'preferred' && info.providers.length > 1) {
-        const leftovers = info.providers.filter(p => p !== info.chosen);
-        if (leftovers.length) {
-          const warning = `Preferred provider for ${info.port} selected ${info.chosen}; remaining providers: ${leftovers.join(', ')}`;
-          warnings.push(warning);
-          console.warn(warning);
-        }
-      }
-      return {
-        port: info.port,
-        provider: info.chosen,
-        reason: info.reason,
-        candidates: info.providers
-      };
-    })
-    .sort((a, b) => a.port.localeCompare(b.port));
-
-  return { explanations, warnings };
 }
 
 async function validateAgainst(schemaName, data) {
@@ -552,7 +357,7 @@ program
       }
     }
 
-    const { explanations } = analyzeProviders(compose, moduleEntries);
+    const { explanations, warnings } = analyzeProviders(compose, moduleEntries);
 
     // Emit a minimal winner report
     const outDir = path.resolve(opts.out || './winner');
@@ -577,6 +382,10 @@ program
     await fs.writeFile(path.join(outDir, 'report.json'), JSON.stringify(winnerReport, null, 2));
     await fs.writeFile(path.join(outDir, 'README.md'), '# Winner (scaffold)\n\nGenerated by `tm compose`.');
     console.log(`✓ Wrote ${path.join(outDir, 'report.json')}`);
+
+    for (const warning of warnings) {
+      console.warn(warning);
+    }
 
     if (opts.explain) {
       console.log(JSON.stringify(explanations, null, 2));

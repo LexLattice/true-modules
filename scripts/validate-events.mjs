@@ -24,7 +24,7 @@ async function loadSchema() {
 
 (async () => {
   const schema = await loadSchema();
-  const ajv = new Ajv2020({ allErrors: true, strict: false });
+  const ajv = new Ajv2020({ allErrors: true, strict: true });
   addFormats(ajv);
   const validate = ajv.compile(schema);
 
