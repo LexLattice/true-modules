@@ -19,7 +19,6 @@ const program = new Command();
 program.name('tm').description('True Modules CLI (scaffold)').version(CLI_VERSION);
 
 const specDir = path.join(__dirname, 'spec');
-
 async function loadJSON(p) {
   const txt = await fs.readFile(p, 'utf8');
   try { return JSON.parse(txt); } catch (e) {
@@ -65,10 +64,27 @@ async function runCmd(cmd, args, opts = {}) {
     }, timeoutMs);
     child.stdout.on('data', d => { out += d; });
     child.stderr.on('data', d => { err += d; });
+    child.on('error', spawnErr => {
+      clearTimeout(timer);
+      const error = new Error(`Failed to spawn ${cmd}: ${spawnErr.message}`);
+      error.cause = spawnErr;
+      error.code = spawnErr.code || 'ERR_SPAWN';
+      error.stdout = out;
+      error.stderr = err;
+      reject(error);
+    });
     child.on('exit', code => {
       clearTimeout(timer);
-      if (code === 0) resolve({ out, err });
-      else reject(new Error(err || `Exit ${code}`));
+      if (code === 0) resolve({ out, err, code });
+      else {
+        const message = (err || out || '').trim();
+        const error = new Error(message || `Exit ${code}`);
+        error.code = 'EXIT_' + code;
+        error.exitCode = code;
+        error.stdout = out;
+        error.stderr = err;
+        reject(error);
+      }
     });
   });
 }
@@ -88,6 +104,132 @@ function verifyPortRequires(compose, manifestsById) {
     }
   }
   return problems;
+}
+
+async function dirExists(p) {
+  try {
+    const stat = await fs.stat(p);
+    return stat.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+async function listTarballs(dir) {
+  try {
+    const entries = await fs.readdir(dir);
+    return entries.filter(name => name.endsWith('.tgz')).sort();
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      throw tmError('npm_pack_failed', `Winner directory not found: ${path.relative(process.cwd(), dir) || dir}`);
+    }
+    throw err;
+  }
+}
+
+function collectPackDiagnostics(stdout, stderr, fallback) {
+  const lines = [];
+  for (const chunk of [stderr, stdout]) {
+    if (!chunk) continue;
+    for (const line of chunk.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (trimmed) lines.push(trimmed);
+    }
+  }
+  if (fallback) lines.push(String(fallback));
+  return lines.filter(Boolean).slice(0, 5);
+}
+
+async function execNpmPack(winnerDir) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('npm', ['pack'], { cwd: winnerDir, shell: false });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', d => { stdout += d; });
+    child.stderr.on('data', d => { stderr += d; });
+    child.on('error', err => {
+      if (err && err.code === 'ENOENT') {
+        resolve({ skipped: true, reason: 'npm executable not found on PATH' });
+        return;
+      }
+      err.stdout = stdout;
+      err.stderr = stderr;
+      reject(err);
+    });
+    child.on('exit', code => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+      } else {
+        const error = new Error(`npm pack exited with code ${code}`);
+        error.stdout = stdout;
+        error.stderr = stderr;
+        error.exitCode = code;
+        reject(error);
+      }
+    });
+  });
+}
+
+async function runNpmPackSmoke(winnerDir, ee) {
+  const relDir = path.relative(process.cwd(), winnerDir) || '.';
+  await ee.emit('NPM_PACK_START', { cwd: relDir });
+  const start = Date.now();
+  let before;
+  try {
+    before = new Set(await listTarballs(winnerDir));
+  } catch (err) {
+    if (err && err.code === 'npm_pack_failed') {
+      const diagnostics = collectPackDiagnostics(null, null, err.message);
+      err.diagnostics = diagnostics;
+      await ee.emit('NPM_PACK_FAIL', { cwd: relDir, code: 'npm_pack_failed', diagnostics, dur_ms: Date.now() - start });
+    }
+    throw err;
+  }
+
+  const produced = new Set();
+  try {
+    const result = await execNpmPack(winnerDir);
+    if (result?.skipped) {
+      await ee.emit('NPM_PACK_SKIP', { cwd: relDir, reason: result.reason, dur_ms: Date.now() - start });
+      ee.info(`ℹ️ npm pack skipped: ${result.reason}`);
+      return { skipped: true, reason: result.reason };
+    }
+    const after = await listTarballs(winnerDir);
+    for (const name of after) {
+      if (!before.has(name)) produced.add(name);
+    }
+    if (produced.size === 0) {
+      const diagnostics = collectPackDiagnostics(result?.stdout, result?.stderr, 'npm pack produced no tarball');
+      const failure = tmError('npm_pack_failed', diagnostics[0] || 'npm pack produced no tarball');
+      failure.diagnostics = diagnostics;
+      await ee.emit('NPM_PACK_FAIL', { cwd: relDir, code: 'npm_pack_failed', diagnostics, dur_ms: Date.now() - start });
+      throw failure;
+    }
+    const tarballName = [...produced][0];
+    await ee.emit('NPM_PACK_PASS', { cwd: relDir, tarball: tarballName, dur_ms: Date.now() - start });
+    ee.info(`✓ npm pack smoke passed (${tarballName})`);
+    return { tarball: tarballName, workspace: relDir };
+  } catch (err) {
+    if (err && err.code === 'npm_pack_failed') throw err;
+    const diagnostics = collectPackDiagnostics(err?.stdout, err?.stderr, err?.message || 'npm pack failed');
+    const failure = tmError('npm_pack_failed', diagnostics[0] || 'npm pack failed');
+    failure.diagnostics = diagnostics;
+    await ee.emit('NPM_PACK_FAIL', { cwd: relDir, code: 'npm_pack_failed', diagnostics, dur_ms: Date.now() - start });
+    throw failure;
+  } finally {
+    if (before) {
+      try {
+        const cleanup = await listTarballs(winnerDir);
+        for (const name of cleanup) {
+          if (!before.has(name)) {
+            try {
+              await fs.rm(path.join(winnerDir, name));
+            } catch {}
+          }
+        }
+      } catch {}
+    }
+  }
 }
 
 async function makeEventEmitter(opts) {
@@ -294,6 +436,316 @@ async function crossImportLint(modulesRoot) {
   }
   return problems;
 }
+
+// ---- lessons miner helpers ----
+function normalizeGlobPattern(pattern) {
+  if (!pattern) return '';
+  let normalized = String(pattern).trim();
+  if (!normalized) return '';
+  normalized = normalized.replace(/\\/g, '/');
+  if (normalized.startsWith('./')) normalized = normalized.slice(2);
+  return normalized;
+}
+
+function globHasWildcards(pattern) {
+  return /[*?]/.test(pattern);
+}
+
+function globBaseDir(pattern) {
+  const normalized = normalizeGlobPattern(pattern);
+  if (!normalized) return '.';
+  if (!globHasWildcards(normalized)) {
+    const dir = path.posix.dirname(normalized);
+    if (!dir || dir === '.' || dir === '') return '.';
+    return dir;
+  }
+  const segments = normalized.split('/');
+  const baseSegments = [];
+  for (let i = 0; i < segments.length; i += 1) {
+    const seg = segments[i];
+    if (seg === '' && i === 0 && normalized.startsWith('/')) {
+      baseSegments.push('');
+      continue;
+    }
+    if (globHasWildcards(seg)) break;
+    baseSegments.push(seg);
+  }
+  if (baseSegments.length === 0) return '.';
+  if (baseSegments.length === 1 && baseSegments[0] === '') return '/';
+  const joined = baseSegments.join('/');
+  if (!joined || joined === '.') return '.';
+  return joined;
+}
+
+function escapeRegexChar(char) {
+  return char.replace(/[-/\\^$+?.()|[\]{}]/g, '\\$&');
+}
+
+function globToRegExp(pattern) {
+  const normalized = normalizeGlobPattern(pattern);
+  let regex = '^';
+  let i = 0;
+  while (i < normalized.length) {
+    const ch = normalized[i];
+    if (ch === '*') {
+      if (normalized[i + 1] === '*') {
+        i += 2;
+        if (normalized[i] === '/') {
+          regex += '(?:[^/]+/)*';
+          i += 1;
+        } else {
+          regex += '.*';
+        }
+        continue;
+      }
+      regex += '[^/]*';
+      i += 1;
+      continue;
+    }
+    if (ch === '?') {
+      regex += '[^/]';
+      i += 1;
+      continue;
+    }
+    regex += escapeRegexChar(ch);
+    i += 1;
+  }
+  regex += '$';
+  return new RegExp(regex);
+}
+
+async function expandGlob(pattern) {
+  const normalized = normalizeGlobPattern(pattern);
+  const base = globBaseDir(normalized);
+  const searchRoot = base === '/' ? '/' : path.resolve(base);
+  const matcher = globToRegExp(normalized);
+  const matches = [];
+  let missingBase = false;
+
+  async function walk(dir) {
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch (err) {
+      if (err && err.code === 'ENOENT') {
+        missingBase = true;
+        return;
+      }
+      throw err;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(fullPath);
+      } else {
+        const rel = path.relative(process.cwd(), fullPath).replace(/\\/g, '/');
+        if (matcher.test(rel)) {
+          matches.push(fullPath);
+        } else {
+          const absNormalized = fullPath.replace(/\\/g, '/');
+          if (matcher.test(absNormalized)) matches.push(fullPath);
+        }
+      }
+    }
+  }
+
+  try {
+    await walk(searchRoot);
+  } catch (err) {
+    if (!(err && err.code === 'ENOENT')) throw err;
+    missingBase = true;
+  }
+
+  return { matches, missingBase };
+}
+
+function normalizeResidualEntry(value) {
+  if (value === null || value === undefined) return null;
+  const text = String(value).replace(/\s+/g, ' ').trim();
+  return text ? text : null;
+}
+
+const FOLLOWUP_PRIORITY_ORDER = new Map([
+  ['P0', 0],
+  ['P1', 1],
+  ['P2', 2],
+  ['P3', 3]
+]);
+
+function normalizeFollowupEntry(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const title = typeof entry.title === 'string' ? entry.title.replace(/\s+/g, ' ').trim() : '';
+  const priorityRaw = typeof entry.priority === 'string' ? entry.priority.trim().toUpperCase() : '';
+  if (!title || !FOLLOWUP_PRIORITY_ORDER.has(priorityRaw)) return null;
+  const normalized = { title, priority: priorityRaw };
+  if (typeof entry.owner === 'string') {
+    const owner = entry.owner.trim();
+    if (owner) normalized.owner = owner;
+  }
+  if (typeof entry.pointer === 'string') {
+    const pointer = entry.pointer.trim();
+    if (pointer) normalized.pointer = pointer;
+  }
+  return normalized;
+}
+
+function followupKey(entry) {
+  const base = { title: entry.title, priority: entry.priority };
+  if (entry.owner) base.owner = entry.owner;
+  if (entry.pointer) base.pointer = entry.pointer;
+  return JSON.stringify(base);
+}
+
+async function locateWinnerDir(composePath) {
+  const resolvedCompose = path.resolve(composePath);
+  const composeDir = path.dirname(resolvedCompose);
+  const candidates = [];
+  if (process.env.TM_WINNER_DIR) candidates.push(path.resolve(process.env.TM_WINNER_DIR));
+  candidates.push(path.join(composeDir, 'winner'));
+  candidates.push(path.resolve(process.cwd(), 'winner'));
+  const seen = new Set();
+  for (const candidate of candidates) {
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
+    try {
+      const stat = await fs.stat(candidate);
+      if (!stat.isDirectory()) continue;
+      await fs.access(path.join(candidate, 'package.json'));
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function collectDiagnostics(err, limit = 5) {
+  const lines = [];
+  const seen = new Set();
+  const push = (value) => {
+    if (typeof value !== 'string') return;
+    for (const rawLine of value.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      if (seen.has(line)) continue;
+      seen.add(line);
+      lines.push(line);
+      if (lines.length >= limit) return;
+    }
+  };
+  if (err && typeof err.stderr === 'string') push(err.stderr);
+  if (err && typeof err.stdout === 'string') push(err.stdout);
+  if (err && typeof err.message === 'string') push(err.message);
+  return lines.slice(0, limit);
+}
+
+function npmInvocation() {
+  const execPath = process.env.npm_execpath;
+  if (execPath) {
+    return { cmd: process.execPath, args: [execPath, 'pack'] };
+  }
+  return { cmd: 'npm', args: ['pack'] };
+}
+
+const lessonsCmd = program
+  .command('lessons')
+  .description('Lessons utilities');
+
+lessonsCmd
+  .command('mine')
+  .requiredOption('--from <patterns...>', 'Glob patterns (space-separated) to locate report.json files')
+  .requiredOption('--out <file>', 'Output file for merged lessons JSON')
+  .description('Aggregate followups and residual risks across reports')
+  .action(async (opts) => {
+    const rawPatterns = Array.isArray(opts.from) ? opts.from : [opts.from];
+    const patterns = rawPatterns
+      .flatMap((value) => String(value).split(/\s+/))
+      .map(normalizeGlobPattern)
+      .filter(Boolean);
+    if (!patterns.length) {
+      throw new Error('At least one --from pattern must be provided.');
+    }
+
+    const matchedFiles = new Set();
+    for (const pattern of patterns) {
+      const { matches, missingBase } = await expandGlob(pattern);
+      if (missingBase && matches.length === 0) {
+        console.warn(`[lessons] Base path not found for pattern: ${pattern}`);
+      }
+      if (matches.length === 0) {
+        console.warn(`[lessons] No files matched pattern: ${pattern}`);
+      }
+      for (const match of matches) matchedFiles.add(match);
+    }
+
+    if (matchedFiles.size === 0) {
+      throw new Error('No reports matched the provided patterns.');
+    }
+
+    const followups = new Map();
+    const residuals = new Set();
+    let processed = 0;
+
+    const sortedFiles = Array.from(matchedFiles).sort((a, b) => a.localeCompare(b));
+    for (const filePath of sortedFiles) {
+      let json;
+      try {
+        const raw = await fs.readFile(filePath, 'utf8');
+        json = JSON.parse(raw);
+      } catch (err) {
+        const rel = path.relative(process.cwd(), filePath) || filePath;
+        console.warn(`[lessons] Skipping ${rel}: ${(err && err.message) || err}`);
+        continue;
+      }
+      processed += 1;
+      const rel = path.relative(process.cwd(), filePath) || filePath;
+
+      if (Array.isArray(json.residual_risks)) {
+        for (const entry of json.residual_risks) {
+          const normalized = normalizeResidualEntry(entry);
+          if (!normalized) continue;
+          residuals.add(normalized);
+        }
+      } else if (json.residual_risks !== undefined) {
+        console.warn(`[lessons] residual_risks in ${rel} is not an array; skipping.`);
+      }
+
+      if (Array.isArray(json.followups)) {
+        for (const entry of json.followups) {
+          const normalized = normalizeFollowupEntry(entry);
+          if (!normalized) continue;
+          followups.set(followupKey(normalized), normalized);
+        }
+      } else if (json.followups !== undefined) {
+        console.warn(`[lessons] followups in ${rel} is not an array; skipping.`);
+      }
+    }
+
+    if (processed === 0) {
+      throw new Error('No reports could be read (all matched files failed to load).');
+    }
+
+    const sortedFollowups = Array.from(followups.values()).sort((a, b) => {
+      const aRank = FOLLOWUP_PRIORITY_ORDER.get(a.priority) ?? 99;
+      const bRank = FOLLOWUP_PRIORITY_ORDER.get(b.priority) ?? 99;
+      if (aRank !== bRank) return aRank - bRank;
+      const titleCmp = a.title.localeCompare(b.title);
+      if (titleCmp !== 0) return titleCmp;
+      const ownerCmp = (a.owner || '').localeCompare(b.owner || '');
+      if (ownerCmp !== 0) return ownerCmp;
+      return (a.pointer || '').localeCompare(b.pointer || '');
+    });
+
+    const sortedResiduals = Array.from(residuals).sort((a, b) => a.localeCompare(b));
+
+    const outPath = path.resolve(opts.out);
+    await fs.mkdir(path.dirname(outPath), { recursive: true });
+    const payload = { followups: sortedFollowups, residual_risks: sortedResiduals };
+    await fs.writeFile(outPath, JSON.stringify(payload, null, 2) + '\n');
+
+    const relOut = path.relative(process.cwd(), outPath) || outPath;
+    console.log(`✓ Lessons mined ${sortedFollowups.length} followups & ${sortedResiduals.length} residual risks from ${processed} reports → ${relOut}`);
+  });
 
 program
   .command('schema-compile')
@@ -646,6 +1098,7 @@ program
   .option('--strict-events', 'Validate events against tm-events@1 schema (fail fast)', false)
   .option('--hook-cmd <cmd>', 'Run a hook that receives a summary JSON on stdin')
   .option('--timeout-ms <n>', 'Per-test timeout (ms)', '60000')
+  .option('--npm-pack', 'Run npm pack smoke against winner workspace', false)
   .description('Run conceptual / shipping gates')
   .action(async (mode, opts) => {
     const composePath = path.resolve(opts.compose);
@@ -671,6 +1124,7 @@ program
     };
     let successMessage = '';
     let failureCode = null;
+    let failureDetail = null;
 
     try {
       await ee.emit('GATES_START', { compose_path: composePath, modules_total: moduleIds.length });
@@ -913,6 +1367,40 @@ program
           }
         }
 
+        if (opts.npmPack) {
+          const winnerDir = await locateWinnerDir(composePath);
+          if (!winnerDir) {
+            await ee.emit('GATES_WARN', {
+              code: 'WARN_NPM_PACK_NO_WORKSPACE',
+              message: 'npm pack requested but no winner workspace with package.json was found; skipping smoke test.'
+            });
+            summary.npm_pack = { status: 'skipped', reason: 'workspace_missing' };
+          } else {
+            try {
+              const result = await runNpmPackSmoke(winnerDir, ee);
+              const relWinner = path.relative(process.cwd(), winnerDir) || '.';
+              if (result?.skipped) {
+                summary.npm_pack = { status: 'skipped', reason: result.reason };
+              } else {
+                summary.npm_pack = {
+                  status: 'passed',
+                  workspace: relWinner,
+                  tarball: result?.tarball || null
+                };
+              }
+            } catch (err) {
+              if (err && err.code === 'npm_pack_failed') {
+                failureCode = 'npm_pack_failed';
+                summary.npm_pack = {
+                  status: 'failed',
+                  diagnostics: Array.isArray(err.diagnostics) ? err.diagnostics.slice(0, 5) : []
+                };
+              }
+              throw err;
+            }
+          }
+        }
+
         successMessage = `✓ Shipping tests passed (${passed}/${total}).`;
       }
       summary.duration_ms = Date.now() - gateStart;
@@ -941,7 +1429,9 @@ program
       summary.error = message;
       const code = err && typeof err === 'object' && 'code' in err && err.code ? err.code : (failureCode || 'E_UNKNOWN');
       summary.code = code;
-      await ee.emit('GATES_FAIL', { code, message, passed: summary.results.passed, failed: summary.results.failed, dur_ms: summary.duration_ms });
+      if (failureDetail) summary.failure_detail = failureDetail;
+      const failDetail = failureDetail ? { ...failureDetail } : {};
+      await ee.emit('GATES_FAIL', { code, message, passed: summary.results.passed, failed: summary.results.failed, dur_ms: summary.duration_ms, ...failDetail });
       throw err instanceof Error ? err : new Error(message);
     } finally {
       await ee.close();

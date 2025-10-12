@@ -1,0 +1,14 @@
+{
+  "context": { "run_id": "winner-demo" },
+  "followups": [
+    {
+      "title": "Composer npm pack smoke",
+      "priority": "P2",
+      "owner": "release",
+      "pointer": "docs/composer.md#packaging-smoke"
+    }
+  ],
+  "residual_risks": [
+    "Composer output lacks package metadata"
+  ]
+}

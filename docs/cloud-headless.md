@@ -64,7 +64,7 @@ This note documents the workflow we use when Codex CLI (acting as the orchestrat
 3. **Variants sweep**: once `ready`, run `codex cloud show --json --all`; if any variant still reports `pending`/`in_progress`, keep polling `show --json --all` until every variant is terminal (`completed`/`failed`/`cancelled`).
 4. **Branch prep**: for each completed variant, create a local branch from the recorded base and export/cache its diff.
 5. **Apply**: apply each completed variant’s diff (or use `codex cloud diff/apply --variant N`), logging failures separately and skipping failed/cancelled variants.
-6. **Handoff**: emit a brief report summarizing variant statuses, branch names, and apply outcomes; hand off to meta-review for deeper analysis/tests.
+6. **Handoff**: emit a brief report summarizing variant statuses, branch names, and apply outcomes; hand off to meta-review for deeper analysis/tests. Once the cycle wraps, append the forward-looking summary (winner, imports borrowed, why others fell short, residual risks, follow-ups) to `docs/meta-history.md` so the record stays in sync.
 
 
 ## References

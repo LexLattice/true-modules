@@ -11,15 +11,16 @@
     "schema:compile": "node tm.mjs schema-compile",
     "compose": "node tm.mjs compose --compose ./examples/compose.json --modules-root ./examples/modules --out ./examples/winner",
     "meta": "node tm.mjs meta --coverage ./examples/coverage.json --out ./examples/compose.greedy.json",
-    "module": "node tm.mjs module --new"
+    "module": "node tm.mjs module --new",
+    "lessons": "node tm.mjs lessons mine --from \\\"docs/**/*.json winner/report.json\\\" --out lessons.json"
   },
   "devDependencies": {
     "@typescript-eslint/parser": "^7.18.0",
     "ajv": "^8.12.0",
     "ajv-formats": "^2.1.1",
     "commander": "^11.1.0",
-    "eslint-plugin-local-rules": "^1.3.2",
     "eslint": "^8.57.1",
+    "eslint-plugin-local-rules": "^1.3.2",
     "typescript": "^5.6.0"
   }
 }
