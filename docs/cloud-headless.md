@@ -53,7 +53,7 @@ This note documents the workflow we use when Codex CLI (acting as the orchestrat
 ## Automation tips
 
 - **Watchdog script** – Codex CLI can run a simple shell loop or use a small Rust/Node helper to poll `codex cloud list --json` until completion.
-- **Artifacts** – When harvesting variants, use `codex cloud export` to capture `patch.diff`, `report.json`, and `meta.json`. Version them under `variants/varN/`.
+- **Artifacts** – When harvesting variants, use `codex cloud export` to capture `patch.diff`, `report.json`, and `meta.json`. Store each variant outside the repo under `.codex-cloud/variants/<task_id>/varN/` so the working tree stays clean while still keeping a stable archive.
 - **Integration with MCP** – Future iterations can expose this loop via the MCP server so ChatGPT can trigger Codex CLI tasks directly.
 - ** Runbook log** – After kickoff, append a record to `.codex/bo4_runs.jsonl` in the repo with `{ "task_id": "...", "env": "...", "base": "...", "best_of": N, "prompt_file": "..." }`. This metadata drives downstream automation like branch creation and scoring scripts.
 
