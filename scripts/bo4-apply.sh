@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+GET_MANIFEST_PROP="$SCRIPT_DIR/lib/get-manifest-prop.mjs"
+
 usage() {
   cat <<USAGE
 Usage: $0 --run-dir <dir> --base <branch> [--task <id>] [--push]
@@ -48,7 +51,7 @@ MANIFEST="$RUN_DIR/run.json"
 [[ -f "$MANIFEST" ]] || { echo "run.json not found in $RUN_DIR" >&2; exit 1; }
 
 info_from_manifest() {
-  node -e "const fs=require('fs');const data=JSON.parse(fs.readFileSync('$MANIFEST','utf8'));const key=process.argv[1];const path=key.split('.');let cur=data;for(const seg of path){if(cur&&Object.prototype.hasOwnProperty.call(cur,seg)){cur=cur[seg];}else{cur=null;break;}}if(typeof cur==='object'&&cur!==null){console.log(JSON.stringify(cur));}else if(cur==null){process.exit(1);}else{console.log(cur);}"
+  node "$GET_MANIFEST_PROP" "$MANIFEST" "$1"
 }
 
 TASK_ID="$TASK_OVERRIDE"
