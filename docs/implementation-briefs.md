@@ -308,3 +308,50 @@ Wave 5 tightens the compose/deploy feedback loop: introduce an override file f
   - Meta history reflects the wave’s outcomes once the run completes.
 
 ---
+
+# Implementation Briefs — Wave 6 (C13–C14)
+
+Wave 6 closes out the first loop by exposing `tm` through an MCP façade and publishing a contributor playbook. Ship both pieces together so automation and human onboarding stay aligned.
+
+---
+
+## C13–C14 — MCP Façade · Contributor Playbook
+
+- **Objective**: expose core `tm` capabilities via MCP so agents can orchestrate workflows programmatically, and document the end-to-end contributor loop for humans.
+- **Key files**: `mcp/server.mjs` (new), `docs/mcp.md` (new), `docs/contributor-playbook.md` (new), `package.json` (scripts/dev deps as needed), `docs/tests.md` (link MCP + playbook), `README.md` (pointer).
+- **Implementation steps**:
+  1. **MCP server scaffolding**:
+     - Author `mcp/server.mjs` using the official MCP Node SDK. Register three tools:
+       - `tm.meta(coverage)` → runs `node tm.mjs meta --coverage <tmpFile> --out <tmpCompose>` and returns the parsed compose JSON.
+       - `tm.compose(compose, modulesRoot)` → runs `node tm.mjs compose --compose <tmpCompose> --modules-root <modulesRoot> --out <tmpWinner>` and returns the scaffold winner report (bill of materials + wiring).
+       - `tm.gates(mode, compose, modulesRoot)` → runs `node tm.mjs gates <mode> --compose <tmpCompose> --modules-root <modulesRoot> --emit-events --events-out <tmpEvents>` and returns `{ pass: boolean, events: [...] }`.
+     - Use per-request temp directories under `os.tmpdir()`; clean them up even on failure.
+     - Stream stderr/stdout to MCP logs. Propagate failures with structured error codes mirroring the CLI (`E_REQUIRE_UNSAT`, `npm_pack_failed`, etc.).
+     - Gate network or filesystem access tightly (no implicit writes outside temp dirs).
+  2. **CLI and packaging**:
+     - Add an npm script (`"mcp:server": "node mcp/server.mjs"`) and, if the SDK requires, add dependencies (e.g., `@modelcontextprotocol/sdk`) to `package.json`.
+     - Document environment variables/config knobs (e.g., `TM_MCP_MODULES_ROOT`) so callers can supply module roots without hard-coding.
+  3. **MCP docs** (`docs/mcp.md`):
+     - Outline prerequisites (Node version, installing the MCP SDK).
+     - Provide sample `~/.mcp/clients/tm.json` configuration for at least one client (VS Code, Claude Desktop, or the generic MCP CLI).
+     - Walk through invoking each tool with example payloads and their JSON responses.
+     - Include troubleshooting tips for common errors (missing modules root, schema validation failure, gate errors).
+  4. **Contributor playbook** (`docs/contributor-playbook.md`):
+     - Structure the doc as a checklist-driven guide: “Plan → Implement → Validate → PR”.
+     - Cover module scaffolding, local testing (`tm compose`, `tm gates shipping --emit-events --strict-events`), evidence expectations, and CI artifact inspection.
+     - Link to the MCP doc for automation hand-offs and to existing specs (`docs/tests.md`, `docs/meta-history.md`, `docs/ports-conformance.md`).
+     - Add a concise “Common snags” appendix (schema failures, cross-module imports, missing evidence) with remediation steps.
+  5. **Doc & README integration**:
+     - Update `docs/tests.md` in the contributor checklist section to reference both the MCP façade (for automation) and the playbook (for human loops).
+     - Add a short blurb in `README.md` pointing newcomers to `docs/contributor-playbook.md`.
+  6. **Validation checklist**:
+     - Run the MCP server locally and exercise each tool using a minimal MCP client script; capture sample responses in `docs/mcp.md`.
+     - Confirm cleanup leaves no stray temp directories under `/tmp`.
+     - Walk through the playbook end-to-end while composing `examples/compose.greedy.json` and running shipping gates; ensure every referenced command exists.
+- **Acceptance**:
+  - MCP tools wrap the existing CLI faithfully, return JSON payloads on success, and surface CLI errors with clear MCP error codes.
+  - Documentation provides a working setup guide and sample requests/responses; all links resolve.
+  - The contributor playbook walks a new module author from repo checkout to PR with actionable troubleshooting notes.
+  - README/tests docs reference the new materials without duplicating content.
+
+---
