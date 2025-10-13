@@ -49,6 +49,233 @@ async function validateFile(schemaName, filePath) {
   return data;
 }
 
+const cloneJson = (value) => {
+  if (value === undefined || value === null) return value;
+  if (typeof structuredClone === 'function') {
+    return structuredClone(value);
+  }
+  return JSON.parse(JSON.stringify(value));
+};
+
+const wiringKey = (segment) => `${segment.from}->${segment.to}`;
+
+function ensureOverrideEntry(section, value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw tmError('E_COMPOSE_OVERRIDES', `Overrides for ${section} must be objects.`);
+  }
+}
+
+function ensureOverrideString(section, value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw tmError('E_COMPOSE_OVERRIDES', `Override entries in ${section} must be non-empty strings.`);
+  }
+}
+
+function mergeComposeOverrides(baseCompose, overridesInput) {
+  if (!overridesInput || typeof overridesInput !== 'object' || Array.isArray(overridesInput)) {
+    throw tmError('E_COMPOSE_OVERRIDES', 'Overrides file must be a JSON object.');
+  }
+
+  const overrides = cloneJson(overridesInput);
+  const merged = cloneJson(baseCompose || {});
+  if (!Array.isArray(merged.modules)) merged.modules = [];
+  if (!Array.isArray(merged.wiring)) merged.wiring = [];
+  if (!Array.isArray(merged.constraints)) merged.constraints = [];
+
+  const baseModuleIds = new Set((merged.modules || []).map(m => (typeof m?.id === 'string' ? m.id : null)).filter(Boolean));
+  const moduleMap = new Map((merged.modules || []).map(m => [m.id, m]));
+  const baseWiringKeys = new Set((merged.wiring || []).map(w => (w && typeof w.from === 'string' && typeof w.to === 'string') ? wiringKey(w) : null).filter(Boolean));
+  const wiringMap = new Map((merged.wiring || []).map(w => [wiringKey(w), w]));
+  const addedModules = new Set();
+  const replacedModules = new Set();
+  const removedModules = new Set();
+  const addedWiring = new Set();
+  const replacedWiring = new Set();
+  const removedWiring = new Set();
+  const addedConstraints = new Set();
+  const removedConstraints = new Set();
+
+  if ('modules' in overrides) {
+    if (!Array.isArray(overrides.modules)) {
+      throw tmError('E_COMPOSE_OVERRIDES', 'overrides.modules must be an array.');
+    }
+    for (const mod of overrides.modules) {
+      if (typeof mod === 'string') {
+        const trimmed = mod.trim();
+        if (!trimmed.startsWith('-')) {
+          throw tmError('E_COMPOSE_OVERRIDES', 'String entries in overrides.modules must start with "-" to remove a module id.');
+        }
+        const targetId = trimmed.slice(1);
+        if (!targetId) {
+          throw tmError('E_COMPOSE_OVERRIDES', 'Module removals must specify the module id after "-".');
+        }
+        if (moduleMap.delete(targetId)) {
+          removedModules.add(targetId);
+        }
+        baseModuleIds.delete(targetId);
+        continue;
+      }
+      ensureOverrideEntry('modules', mod);
+      if (typeof mod.id !== 'string' || !mod.id.trim()) {
+        throw tmError('E_COMPOSE_OVERRIDES', 'Override module entries must include an "id".');
+      }
+      const id = mod.id.trim();
+      const clone = cloneJson(mod);
+      clone.id = id;
+      if (baseModuleIds.has(id)) {
+        replacedModules.add(id);
+      } else {
+        addedModules.add(id);
+      }
+      moduleMap.set(id, clone);
+    }
+    merged.modules = Array.from(moduleMap.values()).sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  }
+
+  if ('wiring' in overrides) {
+    if (!Array.isArray(overrides.wiring)) {
+      throw tmError('E_COMPOSE_OVERRIDES', 'overrides.wiring must be an array.');
+    }
+    for (const segment of overrides.wiring) {
+      if (segment && segment.remove) {
+        if (typeof segment.from !== 'string' || !segment.from.trim() || typeof segment.to !== 'string' || !segment.to.trim()) {
+          throw tmError('E_COMPOSE_OVERRIDES', 'Wiring removals require "from" and "to" strings.');
+        }
+        const from = segment.from.trim();
+        const to = segment.to.trim();
+        const key = wiringKey({ from, to });
+        if (wiringMap.delete(key)) {
+          removedWiring.add(key);
+        }
+        baseWiringKeys.delete(key);
+        continue;
+      }
+      ensureOverrideEntry('wiring', segment);
+      if (typeof segment.from !== 'string' || !segment.from.trim() || typeof segment.to !== 'string' || !segment.to.trim()) {
+        throw tmError('E_COMPOSE_OVERRIDES', 'Override wiring entries require non-empty "from" and "to" strings.');
+      }
+      const clone = cloneJson(segment);
+      clone.from = clone.from.trim();
+      clone.to = clone.to.trim();
+      const key = wiringKey(clone);
+      if (baseWiringKeys.has(key)) {
+        replacedWiring.add(key);
+      } else {
+        addedWiring.add(key);
+      }
+      wiringMap.set(key, clone);
+    }
+    merged.wiring = Array.from(wiringMap.values()).sort((a, b) => {
+      const fromCmp = String(a.from).localeCompare(String(b.from));
+      if (fromCmp !== 0) return fromCmp;
+      return String(a.to).localeCompare(String(b.to));
+    });
+  }
+
+  if ('constraints' in overrides) {
+    if (!Array.isArray(overrides.constraints)) {
+      throw tmError('E_COMPOSE_OVERRIDES', 'overrides.constraints must be an array.');
+    }
+    let working = Array.isArray(merged.constraints) ? [...merged.constraints] : [];
+    for (const raw of overrides.constraints) {
+      ensureOverrideString('constraints', raw);
+      const trimmed = raw.trim();
+      if (trimmed.startsWith('-')) {
+        const target = trimmed.slice(1);
+        if (!target) {
+          throw tmError('E_COMPOSE_OVERRIDES', 'Constraint removals must specify a name after the leading "-".');
+        }
+        const before = working.length;
+        working = working.filter(entry => entry !== target);
+        if (working.length !== before) {
+          removedConstraints.add(target);
+        }
+      } else if (!working.includes(trimmed)) {
+        working.push(trimmed);
+        addedConstraints.add(trimmed);
+      }
+    }
+    merged.constraints = working;
+  }
+
+  const toSortedArray = (set) => Array.from(set).sort((a, b) => String(a).localeCompare(String(b)));
+  const sectionsChanged = [];
+  if (addedModules.size || replacedModules.size || removedModules.size) sectionsChanged.push('modules');
+  if (addedWiring.size || replacedWiring.size || removedWiring.size) sectionsChanged.push('wiring');
+  if (addedConstraints.size || removedConstraints.size) sectionsChanged.push('constraints');
+
+  const detail = {};
+  if (addedModules.size || addedWiring.size || addedConstraints.size) {
+    detail.added = {};
+    if (addedModules.size) detail.added.modules = toSortedArray(addedModules);
+    if (addedWiring.size) detail.added.wiring = toSortedArray(addedWiring);
+    if (addedConstraints.size) detail.added.constraints = toSortedArray(addedConstraints);
+  }
+  if (replacedModules.size || replacedWiring.size) {
+    detail.replaced = {};
+    if (replacedModules.size) detail.replaced.modules = toSortedArray(replacedModules);
+    if (replacedWiring.size) detail.replaced.wiring = toSortedArray(replacedWiring);
+  }
+  if (removedModules.size || removedWiring.size) {
+    detail.removed = {};
+    if (removedModules.size) detail.removed.modules = toSortedArray(removedModules);
+    if (removedWiring.size) detail.removed.wiring = toSortedArray(removedWiring);
+  }
+  if (removedConstraints.size) {
+    detail.removed_constraints = toSortedArray(removedConstraints);
+  }
+  if (sectionsChanged.length) {
+    detail.sections = sectionsChanged;
+  }
+
+  return {
+    compose: merged,
+    summary: {
+      addedModules: toSortedArray(addedModules),
+      replacedModules: toSortedArray(replacedModules),
+      removedModules: toSortedArray(removedModules),
+      addedWiring: toSortedArray(addedWiring),
+      replacedWiring: toSortedArray(replacedWiring),
+      removedWiring: toSortedArray(removedWiring),
+      addedConstraints: toSortedArray(addedConstraints),
+      removedConstraints: toSortedArray(removedConstraints),
+      sectionsChanged,
+      detail,
+      changed: sectionsChanged.length > 0
+    }
+  };
+}
+
+function describeOverrideSummary(summary) {
+  if (!summary || !summary.changed) return '';
+  const parts = [];
+  if (summary.replacedModules?.length) {
+    parts.push(`replaced modules: ${summary.replacedModules.join(', ')}`);
+  }
+  if (summary.addedModules?.length) {
+    parts.push(`added modules: ${summary.addedModules.join(', ')}`);
+  }
+  if (summary.removedModules?.length) {
+    parts.push(`removed modules: ${summary.removedModules.join(', ')}`);
+  }
+  if (summary.replacedWiring?.length) {
+    parts.push(`replaced wiring: ${summary.replacedWiring.join(', ')}`);
+  }
+  if (summary.addedWiring?.length) {
+    parts.push(`added wiring: ${summary.addedWiring.join(', ')}`);
+  }
+  if (summary.removedWiring?.length) {
+    parts.push(`removed wiring: ${summary.removedWiring.join(', ')}`);
+  }
+  if (summary.removedConstraints?.length) {
+    parts.push(`removed constraints: ${summary.removedConstraints.join(', ')}`);
+  }
+  if (summary.addedConstraints?.length) {
+    parts.push(`added constraints: ${summary.addedConstraints.join(', ')}`);
+  }
+  return parts.join('; ');
+}
+
 async function runCmd(cmd, args, opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 60_000;
   return new Promise((resolve, reject) => {
@@ -765,82 +992,148 @@ program
   .requiredOption('--compose <file>', 'Path to compose.json')
   .requiredOption('--modules-root <dir>', 'Root directory containing module folders (with module.json)')
   .option('--out <dir>', './winner', 'Output directory for winner artifacts')
+  .option('--overrides <file>', 'Path to compose overrides JSON')
+  .option('--emit-events', 'Emit line-delimited JSON events', false)
+  .option('--events-out <file>', 'Write events to file (NDJSON)')
+  .option('--events-truncate', 'Truncate events output file before writing', false)
+  .option('--strict-events', 'Validate events against tm-events@1 schema (fail fast)', false)
   .option('--explain', 'Print provider resolution details', false)
   .description('Validate compose plan and manifests; emit a minimal winner report (scaffold)')
   .action(async (opts) => {
-    const compose = await validateFile('compose.schema.json', path.resolve(opts.compose));
+    const composePath = path.resolve(opts.compose);
     const modulesRoot = path.resolve(opts.modules_root || opts.modulesRoot);
+    const baseCompose = await loadJSON(composePath);
 
-    // Load and validate module manifests
-    const moduleEntries = {};
-    for (const m of compose.modules || []) {
-      const mdir = path.join(modulesRoot, m.id);
-      const mfile = path.join(mdir, 'module.json');
-      const manifest = await validateFile('module.schema.json', mfile);
-      moduleEntries[m.id] = { dir: mdir, manifest };
-    }
+    let compose = cloneJson(baseCompose);
+    let overrideSummary = null;
+    let overridesPath = null;
 
-    const manifestsById = Object.fromEntries(
-      Object.entries(moduleEntries).map(([k, v]) => [k, v.manifest])
-    );
-    const reqProblems = verifyPortRequires(compose, manifestsById);
-    if (reqProblems.length) {
-      throw tmError('E_REQUIRE_UNSAT', 'Compose port requirements failed:\n' + reqProblems.join('\n'));
-    }
-
-    // Basic wiring checks
-    const providesPort = (manifest, portName) => {
-      const arr = manifest.provides || [];
-      return arr.some(p => (p.split('@')[0] === portName));
-    };
-
-    for (const w of (compose.wiring || [])) {
-      const [fromName, fromPort] = w.from.split(':');
-      const [toName, toPort] = w.to.split(':');
-      if (!fromName || !fromPort || !toName || !toPort) {
-        throw tmError('E_COMPOSE', `Invalid wiring entry: ${JSON.stringify(w)}`);
+    if (opts.overrides) {
+      overridesPath = path.resolve(opts.overrides);
+      let overrides;
+      try {
+        overrides = await loadJSON(overridesPath);
+      } catch (err) {
+        const rel = path.relative(process.cwd(), overridesPath) || overridesPath;
+        if (err && err.code === 'ENOENT') {
+          throw tmError('E_COMPOSE_OVERRIDES', `Override file not found: ${rel}`);
+        }
+        const message = err?.message || `Failed to read overrides at ${rel}`;
+        const failure = tmError('E_COMPOSE_OVERRIDES', message);
+        failure.cause = err;
+        throw failure;
       }
-      if (fromName !== 'orchestrator') {
-        const ent = moduleEntries[fromName];
-        if (!ent) throw tmError('E_COMPOSE', `Wiring 'from' references unknown module: ${fromName}`);
-        if (!providesPort(ent.manifest, fromPort)) {
-          throw tmError('E_COMPOSE', `Module ${fromName} does not provide port ${fromPort}`);
+      const merged = mergeComposeOverrides(baseCompose, overrides);
+      compose = merged.compose;
+      overrideSummary = merged.summary;
+    }
+
+    await validateAgainst('compose.schema.json', compose);
+
+    const composeJson = JSON.stringify(compose);
+    const composeHash = crypto.createHash('sha256').update(composeJson).digest('hex');
+    const runId = compose.run_id || new Date().toISOString();
+    const ee = await makeEventEmitter({
+      emitEvents: opts.emitEvents,
+      eventsOut: opts.eventsOut ? path.resolve(opts.eventsOut) : null,
+      eventsTruncate: opts.eventsTruncate,
+      strictEvents: opts.strictEvents,
+      context: { run_id: runId, mode: 'compose', compose_sha256: composeHash }
+    });
+
+    const overridesRel = overridesPath ? (path.relative(process.cwd(), overridesPath) || overridesPath) : null;
+    const composeRel = path.relative(process.cwd(), composePath) || composePath;
+
+    try {
+      if (overrideSummary?.changed) {
+        const detail = { ...overrideSummary.detail, compose_path: composeRel };
+        if (overridesRel) detail.overrides_path = overridesRel;
+        await ee.emit('COMPOSE_OVERRIDES_APPLIED', detail);
+        const summaryText = describeOverrideSummary(overrideSummary);
+        const prefix = overridesRel ? ` (${overridesRel})` : '';
+        ee.info(`✓ Overrides applied${prefix}${summaryText ? `: ${summaryText}` : ''}`);
+      } else if (overridesRel) {
+        ee.info(`Overrides file ${overridesRel} did not change the compose plan.`);
+      }
+
+      // Load and validate module manifests
+      const moduleEntries = {};
+      for (const m of compose.modules || []) {
+        const mdir = path.join(modulesRoot, m.id);
+        const mfile = path.join(mdir, 'module.json');
+        const manifest = await validateFile('module.schema.json', mfile);
+        moduleEntries[m.id] = { dir: mdir, manifest };
+      }
+
+      const manifestsById = Object.fromEntries(
+        Object.entries(moduleEntries).map(([k, v]) => [k, v.manifest])
+      );
+      const reqProblems = verifyPortRequires(compose, manifestsById);
+      if (reqProblems.length) {
+        throw tmError('E_REQUIRE_UNSAT', 'Compose port requirements failed:\n' + reqProblems.join('\n'));
+      }
+
+      // Basic wiring checks
+      const providesPort = (manifest, portName) => {
+        const arr = manifest.provides || [];
+        return arr.some(p => (p.split('@')[0] === portName));
+      };
+
+      for (const w of (compose.wiring || [])) {
+        const [fromName, fromPort] = w.from.split(':');
+        const [toName, toPort] = w.to.split(':');
+        if (!fromName || !fromPort || !toName || !toPort) {
+          throw tmError('E_COMPOSE', `Invalid wiring entry: ${JSON.stringify(w)}`);
+        }
+        if (fromName !== 'orchestrator') {
+          const ent = moduleEntries[fromName];
+          if (!ent) throw tmError('E_COMPOSE', `Wiring 'from' references unknown module: ${fromName}`);
+          if (!providesPort(ent.manifest, fromPort)) {
+            throw tmError('E_COMPOSE', `Module ${fromName} does not provide port ${fromPort}`);
+          }
         }
       }
-    }
 
-    const { explanations, warnings } = analyzeProviders(compose, moduleEntries);
+      const { explanations, warnings } = analyzeProviders(compose, moduleEntries);
 
-    // Emit a minimal winner report
-    const outDir = path.resolve(opts.out || './winner');
-    await fs.mkdir(outDir, { recursive: true });
-    const winnerReport = {
-      context: {
-        run_id: compose.run_id || new Date().toISOString(),
-        composer: 'tm (scaffold)',
-        generated_at: new Date().toISOString()
-      },
-      bill_of_materials: (compose.modules || []).map(m => ({
-        id: m.id, version: m.version || '0.0.0'
-      })),
-      wiring: compose.wiring || [],
-      glue: compose.glue || [],
-      constraints: compose.constraints || [],
-      notes: [
-        "This is a scaffold winner report generated without building/linking.",
-        "Use the full Composer to assemble code and run gates in shipping mode."
-      ]
-    };
-    await fs.writeFile(path.join(outDir, 'report.json'), JSON.stringify(winnerReport, null, 2));
-    await fs.writeFile(path.join(outDir, 'README.md'), '# Winner (scaffold)\n\nGenerated by `tm compose`.');
-    console.log(`✓ Wrote ${path.join(outDir, 'report.json')}`);
+      // Emit a minimal winner report
+      const outDir = path.resolve(opts.out || './winner');
+      await fs.mkdir(outDir, { recursive: true });
+      const winnerReport = {
+        context: {
+          run_id: runId,
+          composer: 'tm (scaffold)',
+          generated_at: new Date().toISOString()
+        },
+        bill_of_materials: (compose.modules || []).map(m => ({
+          id: m.id, version: m.version || '0.0.0'
+        })),
+        wiring: compose.wiring || [],
+        glue: compose.glue || [],
+        constraints: compose.constraints || [],
+        notes: [
+          "This is a scaffold winner report generated without building/linking.",
+          "Use the full Composer to assemble code and run gates in shipping mode."
+        ]
+      };
+      await fs.writeFile(path.join(outDir, 'report.json'), JSON.stringify(winnerReport, null, 2));
+      await fs.writeFile(path.join(outDir, 'README.md'), '# Winner (scaffold)\n\nGenerated by `tm compose`.');
+      ee.info(`✓ Wrote ${path.join(outDir, 'report.json')}`);
 
-    for (const warning of warnings) {
-      console.warn(warning);
-    }
+      for (const warning of warnings) {
+        console.warn(warning);
+      }
 
-    if (opts.explain) {
-      console.log(JSON.stringify(explanations, null, 2));
+      if (opts.explain) {
+        const explainOutput = JSON.stringify(explanations, null, 2);
+        if (opts.emitEvents) {
+          ee.info(explainOutput);
+        } else {
+          console.log(explainOutput);
+        }
+      }
+    } finally {
+      await ee.close();
     }
   });
 
@@ -1092,6 +1385,7 @@ program
   .argument('<mode>', 'conceptual|shipping')
   .requiredOption('--compose <file>', 'Path to compose.json')
   .requiredOption('--modules-root <dir>', 'Root dir of modules')
+  .option('--overrides <file>', 'Path to compose overrides JSON')
   .option('--emit-events', 'Emit line-delimited JSON events', false)
   .option('--events-out <file>', 'Write events to file (NDJSON)')
   .option('--events-truncate', 'Truncate events output file before writing', false)
@@ -1102,12 +1396,42 @@ program
   .description('Run conceptual / shipping gates')
   .action(async (mode, opts) => {
     const composePath = path.resolve(opts.compose);
-    const compose = await validateFile('compose.schema.json', composePath);
-    const composeHash = crypto.createHash('sha256').update(await fs.readFile(composePath)).digest('hex');
     const modulesRoot = path.resolve(opts.modules_root || opts.modulesRoot);
-    const manifests = {};
+    const baseCompose = await loadJSON(composePath);
+
+    let compose = cloneJson(baseCompose);
+    let overrideSummary = null;
+    let overridesPath = null;
+
+    if (opts.overrides) {
+      overridesPath = path.resolve(opts.overrides);
+      let overrides;
+      try {
+        overrides = await loadJSON(overridesPath);
+      } catch (err) {
+        const rel = path.relative(process.cwd(), overridesPath) || overridesPath;
+        if (err && err.code === 'ENOENT') {
+          throw tmError('E_COMPOSE_OVERRIDES', `Override file not found: ${rel}`);
+        }
+        const message = err?.message || `Failed to read overrides at ${rel}`;
+        const failure = tmError('E_COMPOSE_OVERRIDES', message);
+        failure.cause = err;
+        throw failure;
+      }
+      const merged = mergeComposeOverrides(baseCompose, overrides);
+      compose = merged.compose;
+      overrideSummary = merged.summary;
+    }
+
+    await validateAgainst('compose.schema.json', compose);
+
+    const composeJson = JSON.stringify(compose);
+    const composeHash = crypto.createHash('sha256').update(composeJson).digest('hex');
     const runId = compose.run_id || new Date().toISOString();
     const moduleIds = (compose.modules || []).map(m => m.id);
+    const overridesRel = overridesPath ? (path.relative(process.cwd(), overridesPath) || overridesPath) : null;
+    const composeRel = path.relative(process.cwd(), composePath) || composePath;
+    const manifests = {};
     const ee = await makeEventEmitter({
       emitEvents: opts.emitEvents,
       eventsOut: opts.eventsOut ? path.resolve(opts.eventsOut) : null,
@@ -1127,6 +1451,16 @@ program
     let failureDetail = null;
 
     try {
+      if (overrideSummary?.changed) {
+        const detail = { ...overrideSummary.detail, compose_path: composeRel };
+        if (overridesRel) detail.overrides_path = overridesRel;
+        await ee.emit('COMPOSE_OVERRIDES_APPLIED', detail);
+        const summaryText = describeOverrideSummary(overrideSummary);
+        ee.info(`✓ Overrides applied${overridesRel ? ` (${overridesRel})` : ''}${summaryText ? `: ${summaryText}` : ''}`);
+      } else if (overridesRel) {
+        ee.info(`Overrides file ${overridesRel} did not change the compose plan.`);
+      }
+
       await ee.emit('GATES_START', { compose_path: composePath, modules_total: moduleIds.length });
       // Shared checks
       for (const m of compose.modules || []) {

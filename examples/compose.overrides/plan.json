@@ -1,0 +1,18 @@
+{
+  "run_id": "override-demo",
+  "modules": [
+    { "id": "git.diff.alt", "version": "0.1.0" },
+    { "id": "git.index.controller", "version": "0.1.0" },
+    { "id": "safety.validation", "version": "0.1.0" }
+  ],
+  "wiring": [
+    { "from": "git.diff.alt:DiffPort", "to": "orchestrator:DiffPort" },
+    { "from": "git.index.controller:IndexPort", "to": "orchestrator:IndexPort" },
+    { "from": "safety.validation:SafetyPort", "to": "git.diff.alt:SafetyPort" }
+  ],
+  "glue": [],
+  "constraints": [
+    "no-cross-imports",
+    "prefer:DiffPort@1=git.diff.alt"
+  ]
+}

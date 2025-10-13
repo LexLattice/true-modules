@@ -83,3 +83,40 @@ Run `tm compose --explain` to see the deterministic resolution for every port:
 
 `reason` is `wired`, `preferred`, or `sole`, indicating whether the provider was
 chosen by wiring, by preference, or because it was the only option.
+
+## Overrides
+
+Pass `--overrides <file>` to apply a JSON patch on top of the generated
+`compose.json` without editing the original plan. Override files may adjust
+modules, wiring, and constraints:
+
+```bash
+node tm.mjs compose \
+  --compose examples/compose.overrides/compose.json \
+  --modules-root examples/modules \
+  --overrides examples/compose.overrides/overrides.json \
+  --out examples/winner
+```
+
+- `modules[]` entries use `id` as the key. Provide a replacement object to swap
+  an existing module (e.g. bumping `version`) or append new modules to the plan.
+  To drop a module, include the string `"-module.id"`.
+- `wiring[]` treats `{from,to}` pairs as the key. Supply a matching object with
+  updated metadata to replace an existing edge, append new edges, or mark an
+  entry with `{ "remove": true }` to drop it.
+- `constraints[]` starts from the base list. New unique strings append to the
+  end; prefix with `-` to remove a constraint.
+
+The fixture under `examples/compose.overrides/` demonstrates replacing the core
+diff provider with `git.diff.alt`, adding `git.index.controller`, and wiring the
+new modules together. Compare the override file with the resulting
+`examples/compose.overrides/plan.json` to see the deterministic ordering
+(modules sorted by id, wiring sorted by `{from,to}`) and the constraint removal
+(`ports-only-coupling`) paired with a new preference.
+
+Override activity emits a `COMPOSE_OVERRIDES_APPLIED` event (use
+`--emit-events --strict-events` to validate against `tm-events@1`). The event
+payload highlights additions, replacements, removals, and the override file
+used. Winner reports inherit the merged plan; the resulting
+`examples/winner/report.json` aligns with `plan.json`, ensuring the BO4 winner
+reflects the override choices.

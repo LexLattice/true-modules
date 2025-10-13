@@ -47,3 +47,20 @@ Records of tournament outcomes and review insights once a pull request wraps. Ea
   - Extend the lessons miner with source attribution for follow-ups/residual risks.
   - Align the glob helper and SafetyPort guard per outstanding review notes.
 
+## C11–C12 — Compose Overrides · CI Polish
+- **Winner**: `codex/add-override-file-support-for-composed-plans` (commit `15479f3116585ceb08476fdd8e65e3d3ec007455`)
+- **Why it won**:
+  - Added `--overrides` support end-to-end (`tm compose` + `tm gates`), including module/wiring removal, deterministic ordering, winner `compose.merged.json`, and `COMPOSE_OVERRIDES_APPLIED` telemetry that stays on stderr when events stream.
+  - Documented override semantics, shipped the `examples/compose.overrides/` fixture, and ensured winner reports mirror the merged plan.
+  - Split CI into `schemas`, `composer_gates`, and `rust_check` jobs with dependency-aware caching for Node (`~/.npm`, `node_modules`) and Cargo (`~/.cargo`, `target`).
+  - Restored the duplicate-provider failure/resolution checks and TypeScript composer scaffold inside CI, while validating override/gates NDJSON streams and exporting a parsed override summary artifact.
+- **Imports pulled in**: N/A (feature work on mainline scaffolds).
+- **Why other variants fell short**: N/A (single-track delivery).
+- **Review feedback addressed**:
+  - Routed override summaries through the event emitter’s `info` channel so NDJSON output stays clean under `--emit-events`.
+  - Added artifact capture for override details and regrouped CI logging for easier audit review.
+- **Tradeoffs**: Override removals still use ad-hoc markers (`"-module"` strings, `{remove:true}` wiring flags); a future schema might expose first-class delete semantics.
+- **Open questions**: Should overrides eventually cover glue/run metadata, and do we surface override diffs directly in winner artifacts beyond the CI summary?
+- **Residual risks**: Cached `node_modules`/Cargo targets can drift if lockfiles change without cache busting; ensure keys stay aligned.
+- **Follow-ups / TODOs**:
+  - Monitor override usage patterns to decide whether CLI should emit a structured diff artifact (beyond CI) or accept layered override files.
