@@ -45,7 +45,7 @@ process.exit(0);
 
 This simple contract keeps shipping gates portable while allowing richer module-specific assertions as your workflow evolves.
 
-Refer to the [Implementer Checklist](../prompts/implementer/CHECKLIST.md) for the MUST-have validation steps. Checking those boxes ensures your local runs of `node tm.mjs gates shipping --emit-events --strict-events` produce the telemetry events (`gate_passed`, `test_passed`, `evidence_linked`) that downstream tooling expects.
+Refer to the [Implementer Checklist](../prompts/implementer/CHECKLIST.md) for the MUST-have validation steps. Checking those boxes ensures your local runs of `node tm.mjs gates shipping --emit-events --strict-events` produce the telemetry events (`gate_passed`, `test_passed`, `evidence_linked`) that downstream tooling expects. For the end-to-end loop, follow the [Contributor Playbook](./contributor-playbook.md) and, when you want automation, lean on the [MCP façade](./mcp.md)—it now supports compose/gates overrides, strict event enforcement, and streaming failure telemetry so agents can mirror the CLI exactly.
 
 When the compose plan relies on an overrides file, run `node tm.mjs compose --overrides <file>` against the fixture (see `examples/compose.overrides/`) before pushing. CI replays the same overrides and will fail fast if the merged plan drifts, and it also enforces the duplicate-provider failure/repair runs plus the TypeScript composer scaffold so regressions surface early.
 
