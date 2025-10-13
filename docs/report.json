@@ -1,0 +1,85 @@
+{
+  "summary": "CI now proves tm meta determinism by diffing consecutive runs, archives the META_PICK telemetry, and extends docs with drivers plus replay guidance so teams can audit selections later.",
+  "checklist": [
+    {
+      "id": "P1",
+      "status": "implemented",
+      "notes": "Composer job runs tm meta twice with the conservative profile, diffs the outputs, validates/replays the emitted META_PICK stream, and documents the workflow for operators."
+    }
+  ],
+  "architecture": {
+    "components_added": [],
+    "components_modified": [
+      {
+        "path": ".github/workflows/ci.yml",
+        "reason": "Added deterministic tm meta runs, meta event validation, replay, and artifact uploads."
+      },
+      {
+        "path": "docs/meta-scorer.md",
+        "reason": "Documented driver payload fields and showed the determinism diff procedure."
+      },
+      {
+        "path": "docs/events.md",
+        "reason": "Clarified META_PICK validation expectations and pointed to meta timeline replay."
+      }
+    ],
+    "data_flow": "tm meta emits META_PICK NDJSON which CI now validates and publishes next to gate telemetry for replay consumers.",
+    "state_management": "Determinism check persists two compose snapshots only long enough to diff them before artifact upload.",
+    "invariants": [
+      "Identical coverage and profile inputs must yield identical compose outputs.",
+      "META_PICK telemetry conforms to tm-events@1 and passes strict validation."
+    ],
+    "tradeoffs": [
+      "Running tm meta twice adds minimal CI time but provides deterministic guarantees."
+    ],
+    "alternatives_considered": [
+      {
+        "option": "Spot-check determinism manually",
+        "rejected_because": "Would not prevent regressions introduced by future changes."
+      }
+    ],
+    "open_questions": [
+      "Should meta compose snapshots beyond the diff be retained for debugging?"
+    ]
+  },
+  "tests": {
+    "added": [],
+    "how_to_run": "node tm.mjs meta --coverage examples/coverage.json --profile conservative --out artifacts/meta.compose.first.json --emit-events --events-out artifacts/meta.events.ndjson --strict-events && node tm.mjs meta --coverage examples/coverage.json --profile conservative --out artifacts/meta.compose.second.json --strict-events && diff -u artifacts/meta.compose.first.json artifacts/meta.compose.second.json && node tm.mjs events validate --in artifacts/meta.events.ndjson --strict && node tm.mjs events replay --in artifacts/meta.events.ndjson --out artifacts/meta.timeline.txt --strict"
+  },
+  "metrics": {
+    "files_changed": 4,
+    "insertions": 99,
+    "deletions": 49
+  },
+  "decisions": [
+    {
+      "option": "Enforce tm meta determinism in CI",
+      "rationale": "Continuous diffing catches regressions early and surfaces the associated META_PICK telemetry for analysis.",
+      "rejected_alternatives": [
+        {
+          "variant": "Single-run smoke check",
+          "reason": "Cannot detect nondeterministic outputs without a second sample.",
+          "confidence": 0.6
+        }
+      ]
+    }
+  ],
+  "risks": [
+    "Meta validation relies on example coverage inputs; broader matrices may reveal new edge cases."
+  ],
+  "residual_risks": [
+    "If tm meta output changes legitimately, CI requires manual artifact review to refresh baselines."
+  ],
+  "followups": [
+    {
+      "title": "Add broader coverage fixtures for meta determinism tests",
+      "priority": "P2",
+      "owner": "Platform",
+      "pointer": "docs/meta-scorer.md#determinism-check"
+    }
+  ],
+  "todos": [
+    "Consider archiving diff outputs when determinism fails for easier debugging."
+  ],
+  "confidence": 0.6
+}

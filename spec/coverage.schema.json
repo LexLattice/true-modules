@@ -62,6 +62,15 @@
             "type": "number",
             "minimum": 0,
             "maximum": 1
+          },
+          "delta_cost": {
+            "type": "number",
+            "minimum": 0
+          },
+          "hygiene": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
           }
         }
       }

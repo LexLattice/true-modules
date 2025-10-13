@@ -26,7 +26,8 @@
         "TSC_FAIL",
         "PORT_CHECK_START",
         "PORT_CHECK_PASS",
-        "PORT_CHECK_FAIL"
+        "PORT_CHECK_FAIL",
+        "META_PICK"
       ]
     },
     "ts": { "type": "string", "format": "date-time" },
@@ -60,6 +61,21 @@
         "dur_ms": { "type": "number", "minimum": 0 },
         "error": { "type": "string" },
         "code": { "type": "string", "pattern": "^[A-Z0-9_]+$" },
+        "gain": { "type": "number" },
+        "profile": { "type": "string" },
+        "drivers": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "coverage_contribution": { "type": "number" },
+            "coverage_goals": { "type": "array", "items": { "type": "string" } },
+            "evidence_strength": { "type": "number" },
+            "risk": { "type": "number" },
+            "delta_cost": { "type": "number" },
+            "hygiene": { "type": "number" },
+            "bundle": { "type": "array", "items": { "type": "string" } }
+          }
+        },
         "artifact": { "type": "string" },
         "compose_path": { "type": "string" },
         "modules_total": { "type": "integer", "minimum": 0 },

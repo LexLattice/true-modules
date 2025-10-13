@@ -10,6 +10,8 @@ import { spawn } from 'child_process';
 import crypto from 'crypto';
 import { collectCrossImportDiagnostics } from './scripts/eslint-run.mjs';
 import { tmError, analyzeProviders } from './scripts/lib/provider-analysis.mjs';
+import { validateEventsFile } from './scripts/events-validate.mjs';
+import { replayEvents } from './scripts/events-replay.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1137,249 +1139,391 @@ program
     }
   });
 
+
+function numberOr(value, fallback) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function cloneWeightMap(map) {
+  return Object.fromEntries(Object.entries(map || {}).map(([k, v]) => [k, Number(v)]));
+}
+
+async function resolveFeatureWeights(profileName, weightsPath) {
+  const builtinPath = path.join(__dirname, 'meta', 'weights.json');
+  const builtin = await loadJSON(builtinPath);
+  const defaultsProfile = builtin?.defaults?.profile || 'conservative';
+  let activeProfile = profileName || defaultsProfile;
+  let resolvedWeights = null;
+  let source = builtinPath;
+
+  if (weightsPath) {
+    const customPath = path.resolve(weightsPath);
+    const custom = await loadJSON(customPath);
+    source = customPath;
+    if (custom && typeof custom === 'object' && !Array.isArray(custom)) {
+      if (custom.profiles && typeof custom.profiles === 'object') {
+        const profile = activeProfile || custom.defaults?.profile;
+        const targetName = profile || Object.keys(custom.profiles)[0];
+        if (!targetName || !custom.profiles[targetName]) {
+          throw tmError('E_META_WEIGHTS', `Profile ${profile || '(unspecified)'} not found in ${customPath}`);
+        }
+        activeProfile = targetName;
+        resolvedWeights = cloneWeightMap(custom.profiles[targetName]);
+      } else {
+        resolvedWeights = cloneWeightMap(custom);
+      }
+    }
+  }
+
+  if (!resolvedWeights) {
+    if (!builtin.profiles || !builtin.profiles[activeProfile]) {
+      throw tmError('E_META_WEIGHTS', `Profile ${activeProfile} not found in ${builtinPath}`);
+    }
+    resolvedWeights = cloneWeightMap(builtin.profiles[activeProfile]);
+  }
+
+  return { profile: activeProfile, weights: resolvedWeights, source };
+}
+
 program
   .command('meta')
   .requiredOption('--coverage <file>', 'Path to coverage.json')
   .option('--out <file>', 'Output compose file', './compose.greedy.json')
-  .option('--respect-requires', 'Skip modules whose requires[] are not satisfied by the current selection', false)
-  .description('Greedy set-cover with simple risk/evidence scoring')
+  .option('--profile <name>', 'Weight profile name to use')
+  .option('--weights <file>', 'Path to custom feature weights JSON')
+  .option('--emit-events', 'Emit line-delimited JSON events', false)
+  .option('--events-out <file>', 'Write events to file (NDJSON)')
+  .option('--events-truncate', 'Truncate events output file before writing', false)
+  .option('--strict-events', 'Validate events against tm-events@1 schema (fail fast)', false)
+  .description('Feasible greedy scorer for module selection')
   .action(async (opts) => {
-    const cov = await validateFile('coverage.schema.json', path.resolve(opts.coverage));
-    const weights = cov.weights || {};
-    const goals = new Set(cov.goals || []);
-    const respectRequires = Boolean(opts.respectRequires);
+    const coveragePath = path.resolve(opts.coverage);
+    const cov = await validateFile('coverage.schema.json', coveragePath);
+    const goalWeights = new Map(Object.entries(cov.weights || {}).map(([goal, weight]) => [goal, typeof weight === 'number' ? weight : 1]));
+    const { profile: activeProfile, weights: featureWeights } = await resolveFeatureWeights(opts.profile, opts.weights);
 
-    
-    // Build module metadata and index ports to providers
     const moduleInfo = new Map();
-    const modulesProvidingPort = new Map();
+    const providersByPort = new Map();
+    const goalSet = new Set(cov.goals || []);
 
-    for (const p of (cov.provides || [])) {
-      const mod = p.module; // e.g., "git.diff.core@var4"
-      if (!moduleInfo.has(mod)) {
-        moduleInfo.set(mod, {
+    for (const entry of (cov.provides || [])) {
+      const moduleId = entry.module;
+      if (!moduleId) continue;
+      if (!moduleInfo.has(moduleId)) {
+        moduleInfo.set(moduleId, {
+          id: moduleId,
           goals: new Set(),
-          risk: 0.5,
-          ev: 0.5,
           provides: new Set(),
-          requires: new Set()
+          requires: new Set(),
+          evidence: 0.5,
+          risk: 0.5,
+          deltaCost: 1,
+          hygiene: 0.5
         });
       }
-      const info = moduleInfo.get(mod);
-      for (const g of (p.covers || [])) info.goals.add(g);
-      if (typeof p.risk === 'number') info.risk = p.risk;
-      if (typeof p.evidence_strength === 'number') info.ev = p.evidence_strength;
-      for (const port of (p.provides_ports || [])) {
-        if (typeof port === 'string' && port.length) {
-          info.provides.add(port);
-          if (!modulesProvidingPort.has(port)) modulesProvidingPort.set(port, new Set());
-          modulesProvidingPort.get(port).add(mod);
-        }
+      const info = moduleInfo.get(moduleId);
+      for (const goal of (entry.covers || [])) info.goals.add(goal);
+      if (typeof entry.evidence_strength === 'number') info.evidence = entry.evidence_strength;
+      if (typeof entry.risk === 'number') info.risk = entry.risk;
+      if (typeof entry.delta_cost === 'number') info.deltaCost = entry.delta_cost;
+      if (typeof entry.hygiene === 'number') info.hygiene = entry.hygiene;
+      for (const port of (entry.provides_ports || [])) {
+        if (typeof port !== 'string' || !port.length) continue;
+        info.provides.add(port);
+        if (!providersByPort.has(port)) providersByPort.set(port, new Set());
+        providersByPort.get(port).add(moduleId);
       }
-      for (const req of (p.requires || [])) {
-        if (typeof req === 'string' && req.length) {
-          info.requires.add(req);
-        }
+      for (const req of (entry.requires || [])) {
+        if (typeof req !== 'string' || !req.length) continue;
+        info.requires.add(req);
       }
     }
 
-    const available = new Set(moduleInfo.keys());
-    const selectedSet = new Set();
-    const selectionOrder = [];
-    const covered = new Set();
-    const selectedPorts = new Set();
+    const sortedModules = Array.from(moduleInfo.keys()).sort((a, b) => a.localeCompare(b));
+    const providerCandidates = new Map();
+    for (const [port, providers] of providersByPort.entries()) {
+      providerCandidates.set(port, Array.from(providers).sort((a, b) => a.localeCompare(b)));
+    }
 
-    function ensureProvides(targetSet, modId) {
+    const selectedModules = new Set();
+    const coveredGoals = new Set();
+    const selectedProviders = new Map();
+    const picks = [];
+
+    const ensureProvidersInto = (map, modId) => {
       const info = moduleInfo.get(modId);
       if (!info) return;
-      for (const port of info.provides) targetSet.add(port);
-    }
-
-    for (const modId of selectedSet) ensureProvides(selectedPorts, modId);
-
-    function bundleFor(moduleId) {
-      if (!respectRequires) {
-        if (!available.has(moduleId)) return { feasible: false, modules: [] };
-        return { feasible: true, modules: [moduleId] };
+      for (const port of info.provides) {
+        if (!map.has(port)) {
+          map.set(port, modId);
+        }
       }
+    };
 
-      const toAdd = new Set();
+    const planBundle = (rootId) => {
+      if (selectedModules.has(rootId)) return { feasible: false, modules: [] };
+      const infoRoot = moduleInfo.get(rootId);
+      if (!infoRoot) return { feasible: false, modules: [] };
+
+      const providerMap = new Map(selectedProviders);
+      const planned = new Set();
+      const order = [];
       const visiting = new Set();
-      const plannedPorts = new Set(selectedPorts);
 
-      function ensurePlanned(modId) {
-        const info = moduleInfo.get(modId);
-        if (!info) return;
-        for (const port of info.provides) plannedPorts.add(port);
-      }
-
-      for (const mod of selectedSet) ensurePlanned(mod);
-
-      function dfs(id) {
-        if (selectedSet.has(id)) {
-          ensurePlanned(id);
+      const visit = (moduleId) => {
+        if (selectedModules.has(moduleId) || planned.has(moduleId)) {
+          ensureProvidersInto(providerMap, moduleId);
           return true;
         }
-        if (!available.has(id) && !toAdd.has(id)) return false;
-        const info = moduleInfo.get(id);
+        const info = moduleInfo.get(moduleId);
         if (!info) return false;
-        if (visiting.has(id)) return false;
-        visiting.add(id);
-
-        ensurePlanned(id);
+        if (visiting.has(moduleId)) return false;
+        visiting.add(moduleId);
 
         for (const req of info.requires) {
-          if (plannedPorts.has(req) || info.provides.has(req)) continue;
-
+          if (info.provides.has(req)) {
+            providerMap.set(req, moduleId);
+            continue;
+          }
+          let providerId = providerMap.get(req);
+          if (providerId) {
+            ensureProvidersInto(providerMap, providerId);
+            continue;
+          }
+          const candidates = providerCandidates.get(req) || [];
           let satisfied = false;
-          for (const pending of toAdd) {
-            const pendingInfo = moduleInfo.get(pending);
-            if (pendingInfo && pendingInfo.provides.has(req)) {
+
+          for (const candidate of candidates) {
+            if (selectedModules.has(candidate) || planned.has(candidate)) {
+              ensureProvidersInto(providerMap, candidate);
+              providerId = candidate;
               satisfied = true;
               break;
             }
           }
-          if (satisfied) continue;
 
-          const candidates = modulesProvidingPort.get(req);
-          if (!candidates || candidates.size === 0) {
-            visiting.delete(id);
-            return false;
-          }
-
-          let provider = null;
-          for (const cand of candidates) {
-            if (selectedSet.has(cand) || toAdd.has(cand)) {
-              provider = cand;
+          if (!satisfied) {
+            for (const candidate of candidates) {
+              if (!moduleInfo.has(candidate)) continue;
+              if (candidate === moduleId) continue;
+              if (!visit(candidate)) continue;
+              ensureProvidersInto(providerMap, candidate);
+              providerId = candidate;
+              satisfied = true;
               break;
             }
           }
 
-          if (!provider) {
-            const availableCandidates = [...candidates].filter(c => available.has(c));
-            if (availableCandidates.length === 0) {
-              visiting.delete(id);
-              return false;
-            }
-
-            let bestProvider = null;
-            let bestScore = Number.NEGATIVE_INFINITY;
-            for (const cand of availableCandidates) {
-              const candInfo = moduleInfo.get(cand);
-              if (!candInfo) continue;
-              const score = (candInfo.ev * 0.5) - candInfo.risk;
-              if (score > bestScore) {
-                bestScore = score;
-                bestProvider = cand;
-              }
-            }
-
-            if (!bestProvider) {
-              visiting.delete(id);
-              return false;
-            }
-
-            provider = bestProvider;
-          }
-
-          if (!dfs(provider)) {
-            visiting.delete(id);
+          if (!satisfied) {
+            visiting.delete(moduleId);
             return false;
           }
-          ensurePlanned(provider);
+
+          providerMap.set(req, providerId);
         }
-
-        visiting.delete(id);
-        if (!selectedSet.has(id)) {
-          toAdd.add(id);
-          ensurePlanned(id);
-        }
-        return true;
-      }
-
-      if (!dfs(moduleId)) return { feasible: false, modules: [] };
-      return { feasible: true, modules: Array.from(toAdd) };
-    }
-
-    function gainOf(mod) {
-      if (!available.has(mod)) return { gain: Number.NEGATIVE_INFINITY, modules: [] };
-      const bundle = bundleFor(mod);
-      if (!bundle.feasible || bundle.modules.length === 0) {
-        if (!bundle.feasible) return { gain: Number.NEGATIVE_INFINITY, modules: [] };
-      }
-
-      let gsum = 0;
-      let riskPenalty = 0;
-      let evidenceBonus = 0;
-      let duplicatePenalty = 0;
-      const bundlePorts = new Set();
-
-      for (const id of bundle.modules) {
-        const info = moduleInfo.get(id);
-        if (!info) continue;
-        for (const g of info.goals) {
-          if (!covered.has(g)) gsum += (typeof weights[g] === 'number' ? weights[g] : 1);
-        }
-        riskPenalty += info.risk;
-        evidenceBonus += info.ev * 0.5;
 
         for (const port of info.provides) {
-          if (selectedPorts.has(port) || bundlePorts.has(port)) duplicatePenalty += 1;
-          bundlePorts.add(port);
+          const existing = providerMap.get(port);
+          if (existing && existing !== moduleId) {
+            visiting.delete(moduleId);
+            return false;
+          }
         }
+
+        planned.add(moduleId);
+        order.push(moduleId);
+        ensureProvidersInto(providerMap, moduleId);
+        visiting.delete(moduleId);
+        return true;
+      };
+
+      if (!visit(rootId)) return { feasible: false, modules: [] };
+      return { feasible: true, modules: order };
+    };
+
+    const computeFeatures = (bundleModules) => {
+      const coverageGoals = new Set();
+      let coverageScore = 0;
+      let evidenceSum = 0;
+      let riskSum = 0;
+      let hygieneSum = 0;
+      let evidenceCount = 0;
+      let riskCount = 0;
+      let hygieneCount = 0;
+      let deltaSum = 0;
+
+      for (const modId of bundleModules) {
+        const info = moduleInfo.get(modId);
+        if (!info) continue;
+        for (const goal of info.goals) {
+          if (coveredGoals.has(goal) || coverageGoals.has(goal)) continue;
+          coverageGoals.add(goal);
+          coverageScore += goalWeights.get(goal) ?? 1;
+        }
+        if (typeof info.evidence === 'number') {
+          evidenceSum += info.evidence;
+          evidenceCount += 1;
+        }
+        if (typeof info.risk === 'number') {
+          riskSum += info.risk;
+          riskCount += 1;
+        }
+        if (typeof info.hygiene === 'number') {
+          hygieneSum += info.hygiene;
+          hygieneCount += 1;
+        }
+        deltaSum += numberOr(info.deltaCost, 0);
       }
 
-      return { gain: gsum + evidenceBonus - riskPenalty - duplicatePenalty, modules: bundle.modules };
-    }
+      return {
+        coverage_contribution: coverageScore,
+        coverage_goals: Array.from(coverageGoals).sort((a, b) => a.localeCompare(b)),
+        evidence_strength: evidenceCount ? evidenceSum / evidenceCount : 0,
+        risk: riskCount ? riskSum / riskCount : 0,
+        delta_cost: deltaSum,
+        hygiene: hygieneCount ? hygieneSum / hygieneCount : 0
+      };
+    };
 
-    while (available.size > 0) {
+    const scoreCandidate = (features) => {
+      let total = 0;
+      for (const [key, weight] of Object.entries(featureWeights)) {
+        if (typeof weight !== 'number') continue;
+        const value = typeof features[key] === 'number' ? features[key] : 0;
+        total += value * weight;
+      }
+      return total;
+    };
+
+    const betterOf = (current, challenger) => {
+      if (!current) return challenger;
+      if (challenger.gain > current.gain) return challenger;
+      if (challenger.gain < current.gain) return current;
+      if (challenger.features.evidence_strength !== current.features.evidence_strength) {
+        return challenger.features.evidence_strength > current.features.evidence_strength ? challenger : current;
+      }
+      if (challenger.features.risk !== current.features.risk) {
+        return challenger.features.risk < current.features.risk ? challenger : current;
+      }
+      if (challenger.features.delta_cost !== current.features.delta_cost) {
+        return challenger.features.delta_cost < current.features.delta_cost ? challenger : current;
+      }
+      return challenger.moduleId.localeCompare(current.moduleId) < 0 ? challenger : current;
+    };
+
+    const remainingGoals = () => {
+      let count = 0;
+      for (const goal of goalSet) {
+        if (!coveredGoals.has(goal)) count += 1;
+      }
+      return count;
+    };
+
+    while (true) {
       let best = null;
-      let bestGain = Number.NEGATIVE_INFINITY;
-      let bestBundle = [];
-      for (const mod of available) {
-        const result = gainOf(mod);
-        if (result.gain > bestGain) {
-          bestGain = result.gain;
-          best = mod;
-          bestBundle = result.modules;
-        }
+      for (const moduleId of sortedModules) {
+        if (selectedModules.has(moduleId)) continue;
+        const plan = planBundle(moduleId);
+        if (!plan.feasible || plan.modules.length === 0) continue;
+        const features = computeFeatures(plan.modules);
+        const gain = scoreCandidate(features);
+        const candidate = { moduleId, plan, features, gain };
+        best = betterOf(best, candidate);
       }
-      if (!best || bestGain <= 0) break;
 
-      for (const id of bestBundle) {
-        if (selectedSet.has(id)) continue;
-        selectedSet.add(id);
-        available.delete(id);
-        selectionOrder.push(id);
-        const info = moduleInfo.get(id);
+      if (!best) break;
+      const addsCoverage = best.features.coverage_goals.length > 0;
+      if (best.gain <= 0 && (!addsCoverage || remainingGoals() === 0)) {
+        break;
+      }
+
+      for (const modId of best.plan.modules) {
+        if (selectedModules.has(modId)) continue;
+        selectedModules.add(modId);
+        ensureProvidersInto(selectedProviders, modId);
+        const info = moduleInfo.get(modId);
         if (info) {
-          for (const g of info.goals) covered.add(g);
-          for (const port of info.provides) selectedPorts.add(port);
+          for (const goal of info.goals) coveredGoals.add(goal);
         }
       }
-      if ([...goals].every(g => covered.has(g))) break;
+
+      picks.push({
+        module: best.moduleId,
+        gain: best.gain,
+        drivers: {
+          coverage_contribution: best.features.coverage_contribution,
+          coverage_goals: best.features.coverage_goals,
+          evidence_strength: best.features.evidence_strength,
+          risk: best.features.risk,
+          delta_cost: best.features.delta_cost,
+          hygiene: best.features.hygiene,
+          bundle: best.plan.modules
+        }
+      });
+
+      if (remainingGoals() === 0) break;
     }
 
-    const modulesSeen = new Set();
-    const modulesList = [];
-    for (const id of selectionOrder) {
-      const base = id.split('@')[0];
-      if (modulesSeen.has(base)) continue;
-      modulesSeen.add(base);
-      modulesList.push({ id: base, version: "0.1.0" });
+    const moduleOrder = [];
+    const seenBase = new Set();
+    for (const pick of picks) {
+      for (const modId of pick.drivers.bundle) {
+        const base = modId.split('@')[0];
+        if (seenBase.has(base)) continue;
+        seenBase.add(base);
+        moduleOrder.push(base);
+      }
+    }
+    for (const modId of selectedModules) {
+      const base = modId.split('@')[0];
+      if (seenBase.has(base)) continue;
+      seenBase.add(base);
+      moduleOrder.push(base);
     }
 
-    const compose = {
-      run_id: new Date().toISOString(),
+    const modulesList = moduleOrder.map(id => ({ id, version: '0.1.0' }));
+    const baseCompose = {
       modules: modulesList,
       wiring: [],
       glue: [],
-      constraints: ["no-cross-imports", "ports-only-coupling"]
+      constraints: ['no-cross-imports', 'ports-only-coupling']
     };
-    await fs.writeFile(path.resolve(opts.out || './compose.greedy.json'), JSON.stringify(compose, null, 2));
-    console.log(`✓ Wrote ${opts.out || './compose.greedy.json'} with ${modulesList.length} modules`);
-  });
+    const baseComposeJson = JSON.stringify(baseCompose);
+    const baseComposeHash = crypto.createHash('sha256').update(baseComposeJson).digest('hex');
+    const runId = cov.run_id || `meta:${activeProfile || 'default'}:${baseComposeHash}`;
+    const compose = {
+      run_id: runId,
+      ...baseCompose
+    };
 
+    const composePath = path.resolve(opts.out || './compose.greedy.json');
+    const composeJson = JSON.stringify(compose, null, 2);
+    await fs.writeFile(composePath, composeJson);
+
+    const composeHash = crypto.createHash('sha256').update(composeJson).digest('hex');
+    const ee = await makeEventEmitter({
+      emitEvents: opts.emitEvents,
+      eventsOut: opts.eventsOut ? path.resolve(opts.eventsOut) : null,
+      eventsTruncate: opts.eventsTruncate,
+      strictEvents: opts.strictEvents,
+      context: { run_id: runId, mode: 'compose', compose_sha256: composeHash }
+    });
+
+    try {
+      for (const pick of picks) {
+        await ee.emit('META_PICK', {
+          module: pick.module,
+          gain: pick.gain,
+          drivers: pick.drivers,
+          profile: activeProfile
+        });
+      }
+      const rel = path.relative(process.cwd(), composePath) || composePath;
+      ee.info(`✓ Wrote ${rel} with ${modulesList.length} modules (profile: ${activeProfile})`);
+    } finally {
+      await ee.close();
+    }
+  });
 program
   .command('gates')
   .argument('<mode>', 'conceptual|shipping')
@@ -1769,6 +1913,53 @@ program
       throw err instanceof Error ? err : new Error(message);
     } finally {
       await ee.close();
+    }
+  });
+
+const eventsCmd = program.command('events').description('Event telemetry utilities');
+
+eventsCmd
+  .command('validate')
+  .requiredOption('--in <file>', 'Input events NDJSON file')
+  .option('--strict', 'Require contiguous sequencing', false)
+  .description('Validate an events NDJSON stream against tm-events@1')
+  .action(async (opts) => {
+    const inputPath = path.resolve(opts.in);
+    try {
+      const result = await validateEventsFile(inputPath, { strict: opts.strict });
+      const composeInfo = result.composeSha ? ` (compose ${result.composeSha})` : '';
+      console.log(`✓ ${result.count} events validated${composeInfo}`);
+    } catch (err) {
+      if (err?.code === 'E_EVENT_SCHEMA') {
+        console.error(err.message);
+        process.exitCode = 1;
+        return;
+      }
+      throw err;
+    }
+  });
+
+eventsCmd
+  .command('replay')
+  .requiredOption('--in <file>', 'Input events NDJSON file')
+  .option('--out <file>', 'Timeline output file', path.join('artifacts', 'timeline.txt'))
+  .option('--strict', 'Validate with contiguous sequencing', false)
+  .description('Render a human-readable timeline from events')
+  .action(async (opts) => {
+    const inputPath = path.resolve(opts.in);
+    const outPath = path.resolve(opts.out || path.join('artifacts', 'timeline.txt'));
+    try {
+      const result = await replayEvents({ inputPath, outPath, strict: opts.strict });
+      const text = result.output.endsWith('\n') ? result.output : result.output + '\n';
+      process.stdout.write(text);
+      console.error(`timeline written to ${path.relative(process.cwd(), result.timelinePath) || result.timelinePath}`);
+    } catch (err) {
+      if (err?.code === 'E_EVENT_SCHEMA') {
+        console.error(err.message);
+        process.exitCode = 1;
+        return;
+      }
+      throw err;
     }
   });
 
