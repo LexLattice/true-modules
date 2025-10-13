@@ -85,3 +85,22 @@ Records of tournament outcomes and review insights once a pull request wraps. Ea
 - **Follow-ups / TODOs**:
   - Land a lightweight MCP smoke test (docs or CI) to keep `respectRequires`/`overrides`/`strictEvents` exercised.
   - Evaluate vendoring or pinning the MCP SDK to avoid future install drift.
+
+## E1–E3 — Meta Scorer v1 · Events Validate/Replay
+- **Winner**: `codex/implement-deterministic-meta-scorer` (commit `600fce7f8dbf6b6f0cf83f98a4eb2ed1f3fd5d6e`)
+- **Why it won**:
+  - Refactored `tm meta` into a feasible-greedy scorer with profile-driven weights, deterministic tie breakers, and `META_PICK` telemetry that captures gain drivers.
+  - Added `tm events validate`/`tm events replay` commands plus CI checks that diff consecutive runs and publish meta/gate timelines for auditability.
+  - Expanded documentation (`docs/meta-scorer.md`, `docs/events.md`) and sample NDJSON so operators and agents can consume the new workflows.
+- **Imports pulled in**: Built on the Wave 7 v1 design; no external imports.
+- **Why other variants fell short**:
+  - `var2` skipped archiving replay output and left documentation light.
+  - `var3` lacked the replay helper and didn’t integrate validation with the sample NDJSON.
+  - `var4` reverted to manual checks without the new commands or deterministic profiles.
+- **Review feedback addressed**: Made the meta `run_id` deterministic so CI diffs pass, per Gemini/Codex review and failing CI logs.
+- **Tradeoffs**: Running meta twice adds minor CI time but guarantees deterministic output; verbose errors surface absolute paths in logs.
+- **Open questions**: Should we add broader coverage fixtures for determinism tests and retain diffs when failures occur?
+- **Residual risks**: The example coverage set may not cover every edge case; future changes must regenerate baselines when behaviour shifts.
+- **Follow-ups / TODOs**:
+  - Capture additional coverage fixtures for determinism validation.
+  - Consider archiving meta diff outputs to ease debugging when CI fails.
