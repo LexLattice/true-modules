@@ -25,14 +25,14 @@ export class Server {
     this.tools = new Map();
   }
 
-  tool(name, _definition, handler) {
+  tool(name, definition, handler) {
     if (typeof name !== 'string') {
       throw new Error('Tool name must be a string');
     }
     if (typeof handler !== 'function') {
       throw new Error('Tool handler must be a function');
     }
-    this.tools.set(name, { handler });
+    this.tools.set(name, { handler, definition: definition ?? null });
   }
 
   async invokeTool(name, input, context = {}) {

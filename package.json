@@ -15,9 +15,6 @@
     "lessons": "node tm.mjs lessons mine --from \\\"docs/**/*.json winner/report.json\\\" --out lessons.json",
     "mcp:server": "node mcp/server.mjs"
   },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^0.1.1"
-  },
   "devDependencies": {
     "@typescript-eslint/parser": "^7.18.0",
     "ajv": "^8.12.0",

@@ -5,11 +5,15 @@ The `mcp/server.mjs` entry point exposes `tm` commands as Model Context Protocol
 ## Prerequisites
 
 - Node.js ≥18.
-- Install repo dependencies (pulls the official MCP SDK when online):
+- Install repo dependencies:
   ```bash
   npm install
   ```
-  If the SDK cannot be fetched the façade falls back to `mcp/sdk-stub.mjs` so you can smoke-test handlers locally, but install `@modelcontextprotocol/sdk` before connecting a real MCP client.
+- (Optional) Install the official MCP SDK when you have network access:
+  ```bash
+  npm install @modelcontextprotocol/sdk
+  ```
+  Without the SDK the façade automatically falls back to `mcp/sdk-stub.mjs`, which logs a warning but still lets you smoke-test the tools locally.
 - Point the façade at your modules checkout via an environment variable (overridable per call):
   ```bash
   export TM_MCP_MODULES_ROOT="/abs/path/to/true-modules/examples/modules"
