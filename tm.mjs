@@ -1482,13 +1482,18 @@ program
     }
 
     const modulesList = moduleOrder.map(id => ({ id, version: '0.1.0' }));
-    const runId = new Date().toISOString();
-    const compose = {
-      run_id: runId,
+    const baseCompose = {
       modules: modulesList,
       wiring: [],
       glue: [],
       constraints: ['no-cross-imports', 'ports-only-coupling']
+    };
+    const baseComposeJson = JSON.stringify(baseCompose);
+    const baseComposeHash = crypto.createHash('sha256').update(baseComposeJson).digest('hex');
+    const runId = cov.run_id || `meta:${activeProfile || 'default'}:${baseComposeHash}`;
+    const compose = {
+      run_id: runId,
+      ...baseCompose
     };
 
     const composePath = path.resolve(opts.out || './compose.greedy.json');
