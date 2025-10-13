@@ -1,0 +1,28 @@
+{
+  "defaults": {
+    "profile": "conservative"
+  },
+  "profiles": {
+    "conservative": {
+      "coverage_contribution": 1.0,
+      "evidence_strength": 0.8,
+      "risk": -1.2,
+      "delta_cost": -0.6,
+      "hygiene": 0.4
+    },
+    "fast": {
+      "coverage_contribution": 1.2,
+      "evidence_strength": 0.4,
+      "risk": -0.8,
+      "delta_cost": -0.3,
+      "hygiene": 0.2
+    },
+    "evidence-heavy": {
+      "coverage_contribution": 0.9,
+      "evidence_strength": 1.5,
+      "risk": -1.0,
+      "delta_cost": -0.4,
+      "hygiene": 0.6
+    }
+  }
+}

@@ -58,6 +58,25 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts tmp
 
+          echo "::group::Meta deterministic compose"
+          node tm.mjs meta \
+            --coverage examples/coverage.json \
+            --profile conservative \
+            --out artifacts/meta.compose.first.json \
+            --emit-events \
+            --events-out artifacts/meta.events.ndjson \
+            --strict-events
+          node tm.mjs meta \
+            --coverage examples/coverage.json \
+            --profile conservative \
+            --out artifacts/meta.compose.second.json \
+            --strict-events
+          if ! diff -u artifacts/meta.compose.first.json artifacts/meta.compose.second.json; then
+            echo "Meta compose output differs across runs" >&2
+            exit 1
+          fi
+          echo "::endgroup::"
+
           echo "::group::Compose with overrides"
           node tm.mjs compose \
             --compose examples/compose.greedy.json \
@@ -103,6 +122,23 @@ jobs:
         run: |
           jq -c . artifacts/compose.overrides.ndjson > /dev/null
           jq -c . artifacts/events.ndjson > /dev/null
+          jq -c . artifacts/meta.events.ndjson > /dev/null
+
+      - name: Validate sample events
+        run: node tm.mjs events validate --in examples/events.ndjson --strict
+
+      - name: Validate gate events
+        run: node tm.mjs events validate --in artifacts/events.ndjson --strict
+
+      - name: Validate meta events
+        run: node tm.mjs events validate --in artifacts/meta.events.ndjson --strict
+
+      - name: Replay gate events
+        run: node tm.mjs events replay --in artifacts/events.ndjson --out artifacts/timeline.txt --strict
+
+      - name: Replay meta events
+        run: node tm.mjs events replay --in artifacts/meta.events.ndjson --out artifacts/meta.timeline.txt --strict
+
 
       - name: Extract override summary
         run: |
@@ -116,6 +152,9 @@ jobs:
             artifacts/compose.overrides.ndjson
             artifacts/compose.overrides.summary.json
             artifacts/events.ndjson
+            artifacts/timeline.txt
+            artifacts/meta.events.ndjson
+            artifacts/meta.timeline.txt
           if-no-files-found: warn
 
   rust_check:

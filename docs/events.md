@@ -62,3 +62,56 @@ node tm.mjs gates shipping \
 
 Each event may include an `artifact` pointer (for example the TypeScript log) so
 automation can upload supporting evidence alongside the NDJSON file.
+
+## META_PICK events
+
+`tm meta` now emits `META_PICK` when greedy selection chooses a bundle. The
+`detail` payload contains the module id, gain, profile, and driver stats so the
+run can be replayed or analysed offline. CI validates this stream alongside the
+gate telemetry to guarantee the meta scorer remains deterministic.
+
+Example:
+
+```json
+{
+  "event": "META_PICK",
+  "detail": {
+    "module": "git.diff.core@var4",
+    "gain": 2.35,
+    "profile": "fast",
+    "drivers": {
+      "coverage_contribution": 2,
+      "coverage_goals": ["P3"],
+      "evidence_strength": 0.8,
+      "risk": 0.2,
+      "delta_cost": 1,
+      "hygiene": 0.5,
+      "bundle": ["git.diff.core@var4", "safety.validation@var2"]
+    }
+  }
+}
+```
+
+## Validating and replaying events
+
+Two helper commands operate on the recorded NDJSON streams:
+
+- `tm events validate --in <file> [--strict]` parses each line, enforces
+  monotonic (or contiguous with `--strict`) `seq` values, and verifies that all
+  entries share the same `context.compose_sha256`. The command fails fast with
+  `E_EVENT_SCHEMA` and prints the offending line number.
+- `tm events replay --in <file> [--out timeline.txt]` renders a stable
+  human-readable timeline summarising starts, picks, gate durations, and the
+  first failure per event type. The output is printed to stdout and written to
+  the specified file (default `artifacts/timeline.txt`).
+
+Example usage:
+
+```bash
+node tm.mjs events validate --in artifacts/events.ndjson --strict
+node tm.mjs events replay --in artifacts/events.ndjson --out artifacts/timeline.txt
+```
+
+The replay output is ideal for CI artifacts and quick run diagnostics. Apply the
+same commands to `artifacts/meta.events.ndjson` to review the `META_PICK`
+timeline captured during composition.
