@@ -64,3 +64,24 @@ Records of tournament outcomes and review insights once a pull request wraps. Ea
 - **Residual risks**: Cached `node_modules`/Cargo targets can drift if lockfiles change without cache busting; ensure keys stay aligned.
 - **Follow-ups / TODOs**:
   - Monitor override usage patterns to decide whether CLI should emit a structured diff artifact (beyond CI) or accept layered override files.
+
+## C13–C14 — MCP Façade · Contributor Playbook (Follow-up)
+- **Winner**: `codex/implement-mcp-facade-documentation-and-tools` (commit `9e5f75dac4f1646c543caf8e6316a51c35234315`)
+- **Why it won**:
+  - Extended `mcp/server.mjs` with optional `respectRequires`, overrides, and `strictEvents`, aligning agent workflows with CLI behavior.
+  - Hardened error handling so responses always include CLI context, structured error codes, and gate events—even when commands fail.
+  - Published detailed façade docs (`docs/mcp.md`) and a four-phase contributor playbook so humans and agents share the same validation loop.
+- **Imports pulled in**: N/A (iteration on the Wave 6 façade).
+- **Why other variants fell short**:
+  - `var2` required the MCP SDK during offline `npm ci`, breaking sandbox installs.
+  - `var3` returned bare compose JSON from `tm.meta`, violating the documented `{ compose: … }` envelope.
+  - `var4` reimplemented MCP framing manually, diverging from the official SDK’s transport and schema validation.
+- **Review feedback addressed**:
+  - Clarified docs/tests that strict events are opt-in and tightened messaging about the SDK fallback.
+  - Updated the stub server to store tool definitions so schema issues surface during offline testing.
+- **Tradeoffs**: Exposing CLI args/stdout/stderr in MCP errors accelerates debugging but can leak absolute paths in agent logs.
+- **Open questions**: Should we add automated MCP integration tests once the SDK is vendored, and do we want to emit override diff artifacts outside CI summaries?
+- **Residual risks**: Agents still need to install the real SDK when network access returns; stub mode can mask transport mismatches until then.
+- **Follow-ups / TODOs**:
+  - Land a lightweight MCP smoke test (docs or CI) to keep `respectRequires`/`overrides`/`strictEvents` exercised.
+  - Evaluate vendoring or pinning the MCP SDK to avoid future install drift.
