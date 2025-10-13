@@ -71,6 +71,7 @@ Shipping test expectations live in **[docs/tests.md](docs/tests.md)**.
 Deterministic provider selection and compose diagnostics are covered in
 **[docs/composer.md](docs/composer.md)**. Event streaming semantics live in
 **[docs/events.md](docs/events.md)**.
+New contributors can follow the **[Contributor Playbook](docs/contributor-playbook.md)** (paired with the **[MCP façade](docs/mcp.md)**) for a plan → implement → validate → PR checklist that works for both humans and agents.
 
 ## License
 Dual-licensed under **MIT** and **Apache-2.0**. See `LICENSE-MIT` and `LICENSE-APACHE`.

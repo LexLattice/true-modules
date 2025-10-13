@@ -12,7 +12,8 @@
     "compose": "node tm.mjs compose --compose ./examples/compose.json --modules-root ./examples/modules --out ./examples/winner",
     "meta": "node tm.mjs meta --coverage ./examples/coverage.json --out ./examples/compose.greedy.json",
     "module": "node tm.mjs module --new",
-    "lessons": "node tm.mjs lessons mine --from \\\"docs/**/*.json winner/report.json\\\" --out lessons.json"
+    "lessons": "node tm.mjs lessons mine --from \\\"docs/**/*.json winner/report.json\\\" --out lessons.json",
+    "mcp:server": "node mcp/server.mjs"
   },
   "devDependencies": {
     "@typescript-eslint/parser": "^7.18.0",

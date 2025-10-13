@@ -1,85 +1,91 @@
 {
-  "summary": "Routed compose override messaging through the event emitter, restored the composer smoke checks in CI, and archive override telemetry for reviewers.",
+  "summary": "Hardened the MCP façade with override/strict-event support plus richer error telemetry, and expanded the contributor playbook so humans and agents can follow the same validation flow.",
   "checklist": [
     {
       "id": "P1",
       "status": "implemented",
-      "notes": "Switched compose/gates override logs to ee.info, reinstated duplicate-provider and TypeScript composer coverage, and persisted override summaries in CI artifacts."
+      "notes": "Extended tm.meta/compose/gates arguments, updated docs with payload samples and troubleshooting, and refreshed onboarding references."
     }
   ],
   "architecture": {
     "components_added": [],
     "components_modified": [
       {
-        "path": "tm.mjs",
-        "reason": "Redirected override summaries and compose explain output through ee.info when emitting events to keep stdout pristine."
+        "path": "mcp/server.mjs",
+        "reason": "Accept overrides/respect-requires/strict-events inputs, stream CLI args in errors, and surface gate telemetry on failure."
       },
       {
-        "path": ".github/workflows/ci.yml",
-        "reason": "Reintroduced duplicate-provider and TS composer runs, enabled compose event capture, and wrote override summary artifacts."
+        "path": "docs/mcp.md",
+        "reason": "Document the richer tool arguments, sample payloads, and troubleshooting table."
+      },
+      {
+        "path": "docs/contributor-playbook.md",
+        "reason": "Rewrote the checklist into a four-phase guide with automation hand-offs and snags."
       },
       {
         "path": "docs/tests.md",
-        "reason": "Documented that CI now exercises overrides plus duplicate-provider and TypeScript composer checks."
+        "reason": "Linked the contributor checklist to the enhanced MCP façade messaging."
+      },
+      {
+        "path": "README.md",
+        "reason": "Onboard newcomers to both the playbook and MCP façade in one blurb."
       }
     ],
-    "data_flow": "Compose override events flow through the emitter, land in compose.overrides.ndjson, and are summarized into compose.overrides.summary.json for upload alongside gates events.",
-    "state_management": "Event detail is buffered via existing summary sets in tm.mjs and serialized during CI with a Node script; workflow caches continue to guard npm installs.",
+    "data_flow": "Tool inputs (coverage, compose, overrides) are serialized into per-call temp directories, tm.mjs executes with the forwarded flags, and responses now include CLI args plus parsed events even when gates fail.",
+    "state_management": "All intermediate files live in ephemeral temp directories; overrides are written alongside compose payloads and deleted after the request completes.",
     "invariants": [
-      "Event emission with --emit-events still writes NDJSON-only payloads on stdout.",
-      "Composer CI keeps strict-events enabled so schema violations break the build."
+      "CLI stdout/stderr stream to the MCP logger for observability.",
+      "Temporary workspaces under os.tmpdir() are removed after each request."
     ],
     "tradeoffs": [
-      "Inline Node parsing in the workflow increases script complexity but avoids extra dependencies such as jq filters for nested JSON."
+      "Surfacing raw CLI arguments in error payloads improves debugging but exposes absolute paths in agent logs."
     ],
     "alternatives_considered": [
       {
-        "option": "Parse override events with jq in the workflow",
-        "rejected_because": "The nested detail structure is easier to traverse with Node without risking portable jq invocations."
+        "option": "Defer override handling to clients",
+        "rejected_because": "Would force agents to manage temp files manually and drift from CLI ergonomics."
       }
     ],
     "open_questions": [
-      "Should gates also upload its own override summary to avoid recomputing from compose events?"
+      "Should we add a persistent smoke-test script to exercise respectRequires/overrides automatically in CI?"
     ]
   },
   "tests": {
     "added": [],
-    "how_to_run": "node tm.mjs compose --compose examples/compose.greedy.json --modules-root examples/modules --overrides examples/compose.overrides/overrides.json --out examples/winner --emit-events --events-out tmp/compose.ndjson --strict-events"
+    "how_to_run": "TM_MCP_MODULES_ROOT=examples/modules node - <<'NODE'\nimport fs from 'node:fs/promises';\nimport { tools } from './mcp/server.mjs';\nconst coverage = JSON.parse(await fs.readFile('./examples/coverage.json', 'utf8'));\nconst composePlan = JSON.parse(await fs.readFile('./examples/compose.greedy.json', 'utf8'));\nawait tools.meta({ input: { coverage, respectRequires: true } }, { logger: console });\nawait tools.compose({ input: { compose: composePlan, overrides: { modules: [] } } }, { logger: console });\nawait tools.gates({ input: { mode: 'conceptual', compose: composePlan, strictEvents: true } }, { logger: console });\nNODE"
   },
   "metrics": {
-    "files_changed": 4,
-    "insertions": 88,
-    "deletions": 58
+    "files_changed": 6,
+    "insertions": 279,
+    "deletions": 122
   },
   "decisions": [
     {
-      "option": "Route override status messaging through ee.info",
-      "rationale": "Keeps NDJSON output clean during --emit-events runs while still surfacing human-readable context.",
+      "option": "Return gate events and CLI context in MCP error payloads",
+      "rationale": "Agents need structured telemetry to diagnose failures without rerunning the CLI manually.",
       "rejected_alternatives": [
         {
-          "variant": "Silence override logs when emitting events",
-          "reason": "Reviewers still need immediate confirmation that overrides applied; ee.info keeps the signal on stderr.",
-          "confidence": 0.4
+          "variant": "Only propagate the tm error code",
+          "reason": "Provides minimal insight; clients would still need stdout/stderr scraping to debug.",
+          "confidence": 0.5
         }
       ]
     }
   ],
   "risks": [
-    "Workflow summary extraction will fail if COMPOSE_OVERRIDES_APPLIED ever stops emitting, breaking CI runs."
+    "Clients may depend on the new error data shape, making future breaking changes harder."
   ],
   "residual_risks": [
-    "Upstream TypeScript version drift may continue to warn during lint even though gates remain green."
+    "Override files with invalid schemas still surface CLI errors; we do not pre-validate the payload before spawning tm."
   ],
   "followups": [
     {
-      "title": "Harden override summary extraction for gates events",
+      "title": "Add automated MCP smoke tests covering overrides and strictEvents",
       "priority": "P2",
       "owner": "platform",
-      "pointer": ".github/workflows/ci.yml#L1"
+      "pointer": "docs/mcp.md"
     }
   ],
-  "todos": [
-    "Consider deduplicating compose/gates override summary handling into a shared helper."
-  ],
+  "todos": [],
   "confidence": 0.6
 }
