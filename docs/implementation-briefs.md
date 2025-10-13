@@ -355,3 +355,140 @@ Wave 6 closes out the first loop by exposing `tm` through an MCP façade and p
   - README/tests docs reference the new materials without duplicating content.
 
 ---
+
+## E1–E3 — Meta Scorer v1 · Events Validate/Replay
+
+**Objective**: make meta selection deterministic (feasible-greedy with weights/profiles) and formalize event integrity + replayable timelines.
+
+**Key files**: `tm.mjs`, `meta/weights.json` (new), `docs/meta-scorer.md` (new), `spec/events.schema.json` (already present), `docs/events.md` (extend), `scripts/events-validate.mjs` (new), `scripts/events-replay.mjs` (new), CI workflow.
+
+**Implementation steps**:
+
+1. **Meta scorer**
+
+   * Implement feasible-greedy in `tm mjs meta`:
+
+     * Features per module: `coverage_contribution`, `evidence_strength`, `risk`, `delta_cost`, `hygiene`.
+     * Feasibility: `requires[]` satisfied, duplicate providers resolved.
+   * Add weights profiles in `meta/weights.json` (`conservative`, `fast`, `evidence-heavy`); flags: `--profile <name>` or `--weights <file>`.
+   * Emit `META_PICK` events with `{module, gain, drivers}`; deterministic tiebreakers (evidence↓, risk↑, delta↑, id lexicographic).
+   * Docs: short explainer + examples.
+
+2. **Events validate**
+
+   * `tm events validate --in artifacts/events.ndjson --strict`:
+
+     * Validate each NDJSON line against `tm-events@1`, enforce monotonic `seq`, and match `context.compose_sha256` if present.
+     * Exit with `E_EVENT_SCHEMA` on first violation; print offending line number.
+
+3. **Events replay**
+
+   * `tm events replay --in artifacts/events.ndjson` → timeline:
+
+     * Summarize starts, picks, gate durations, first failures with `detail.code`.
+     * Output to stdout and `artifacts/timeline.txt`.
+
+4. **CI**
+
+   * Add steps: validate + replay on example runs; upload `events.ndjson` and `timeline.txt`.
+
+**Acceptance**:
+
+* Same inputs + weights profile ⇒ identical `compose.json` across runs.
+* `validate` fails on any malformed event; `replay` prints a stable timeline.
+* Docs link to flags and show one minimal before/after example.
+
+---
+
+## E2 — Headless Codex Cloud Kit (watch · harvest · meta · compose · gates · apply)
+
+**Objective**: run the BO4 loop end-to-end headlessly with durable artifacts and zero TUI dependency.
+
+**Key files**: `scripts/codex-watch.mjs` (new), `scripts/bo4-harvest.mjs` (new), `scripts/bo4-meta-run.mjs` (new), `scripts/bo4-compose.mjs` (new), `scripts/bo4-apply.sh` (new), `runs/<date-slug>/run.json` (manifest), `docs/headless-cloud.md` (new), CI job.
+
+**Implementation steps**:
+
+1. **Watcher** (`codex-watch.mjs`)
+
+   * Poll `codex cloud list --json` for `task_id`; write **tm-events@1** heartbeats to `runs/.../artifacts/events.ndjson`; exit on `ready|error`.
+
+2. **Harvest** (`bo4-harvest.mjs`)
+
+   * `codex cloud export/show/diff` to `runs/.../variants/varN/`.
+   * Enforce **True Module** deliverables; if missing, exit `E_VARIANT_NO_MODULES`.
+
+3. **Meta** (`bo4-meta-run.mjs`)
+
+   * Invoke local meta (or cloud reviewer) → `runs/.../meta/{coverage.json,compose.json,report.json}`.
+   * Compute and record `compose_sha256` in `run.json`.
+
+4. **Compose + Gates** (`bo4-compose.mjs`)
+
+   * Call composer → `runs/.../winner`; run `tm gates shipping --emit-events --events-out ... --strict-events`.
+   * On failure, print the first actionable error + artifact pointer (tsc/lint log).
+
+5. **Apply** (`bo4-apply.sh`)
+
+   * If single variant chosen: `codex cloud apply ... --preflight`.
+   * Else: create `bo4/<task_id>/winner` branch, commit `winner/`, push PR.
+
+6. **Docs & CI**
+
+   * `docs/headless-cloud.md` with the 10-step loop and run tree.
+   * CI job that runs a miniature headless loop on examples.
+
+**Acceptance**:
+
+* One command (or make target) executes watcher→harvest→meta→compose→gates; artifacts written and uploaded.
+* Non-module variants fail early with `E_VARIANT_NO_MODULES`.
+* Manifest `run.json` populated with `task_id`, hashes, artifacts pointers.
+
+---
+
+## E4–E5 — Oracles + Side-Effects Enforcement
+
+- **Objective**: guarantee deterministic behaviour and enforce declared side effects.
+- **Key files**: `oracles/specs/*.json` (new), `tm.mjs` (oracle runner, gate toggle, side-effect wrapper), `docs/oracles.md` (new).
+- **Implementation steps**:
+  1. **Oracle runner**: `tm oracles run --modules-root <dir> --spec oracles/**.json` to execute determinism/idempotence checks; ship example specs covering repeatable I/O.
+  2. **Gate integration**: wire `tm gates shipping --with-oracles` to emit `ORACLE_START/PASS/FAIL` with module/case detail.
+  3. **Side-effects guard**: instrument filesystem writes and process spawns during gates; compare to `module.json.side_effects`, failing with `E_SIDEEFFECTS_DECLARATION` or `E_SIDEEFFECTS_FORBIDDEN` as appropriate.
+- **Acceptance**:
+  - Known nondeterministic fixtures fail with the new oracle error codes; accurately declared modules pass.
+  - `--with-oracles` succeeds on the examples; documentation explains how to author new specs and declare side effects.
+
+---
+
+## E6–E7–E8 — Port Version Negotiation · SafetyPort Deep Suite · Performance & Caching
+
+**Objective**: safe multi-major ports, hardened platform edges, faster loops.
+
+**Key files**: `runtimes/ts/composer/index.mjs`, `docs/composer.md` (extend), `examples/modules/safety.validation/tests/*` (expand), `tm.mjs` (durations, caches), CI.
+
+**Implementation steps**:
+
+1. **Port version negotiation**
+
+   * Provider identity = `PortName@major`. If multiple majors present, follow policy:
+
+     * Prefer `compose.constraints.preferred_providers["Port@major"]` or explicit wiring; else error `E_PORT_VERSION_AMBIG`.
+   * `--explain` prints chosen providers + rule (wired/preferred/sole).
+
+2. **Safety deep suite**
+
+   * Add tests for path normalization nuances (case-insensitive FS, symlinks, UNC/WSL specifics).
+   * Conditional runners emit `TEST_SKIPPED` events on unsupported OS; PASS overall.
+
+3. **Performance & caching**
+
+   * ESLint cache + TypeScript incremental on shipping gates.
+   * Composer smart copy (hash compare) for `winner/`.
+   * Emit `detail.dur_ms` per major phase and show a per-gate summary; CI compares baseline (2nd run ≥30% faster on examples).
+
+**Acceptance**:
+
+* Mixed majors without policy → `E_PORT_VERSION_AMBIG` (non-zero exit); with constraints/wiring → pass.
+* Safety suite passes on Linux/mac; executes real assertions on Windows.
+* 2nd run on unchanged examples shows measurable speedup; durations visible in events and CI logs.
+
+---
