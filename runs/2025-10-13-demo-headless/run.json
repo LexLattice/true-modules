@@ -1,0 +1,65 @@
+{
+  "task_id": "demo-headless",
+  "run_id": "meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4",
+  "created_at": "2025-10-13T21:54:40.360Z",
+  "artifacts": {
+    "events": "runs/2025-10-13-demo-headless/artifacts/events.ndjson"
+  },
+  "variants": [
+    {
+      "variant": 0,
+      "status": "ready",
+      "dir": "runs/2025-10-13-demo-headless/variants/var0",
+      "modules_dir": "runs/2025-10-13-demo-headless/variants/var0/modules",
+      "metadata": "runs/2025-10-13-demo-headless/variants/var0/variant.json",
+      "diff": "runs/2025-10-13-demo-headless/variants/var0/diff.patch",
+      "modules": {
+        "count": 5,
+        "ids": [
+          "git.diff.alt",
+          "git.diff.core",
+          "git.index.controller",
+          "safety.validation",
+          "worktree.manager"
+        ]
+      }
+    }
+  ],
+  "events_mode": "shipping",
+  "watch": {
+    "started_at": "2025-10-13T21:54:40.466Z",
+    "status": "ready",
+    "interval_ms": 5000,
+    "ended_at": "2025-10-13T21:54:40.579Z"
+  },
+  "harvest": {
+    "completed_at": "2025-10-13T21:54:41.066Z",
+    "variants": 1,
+    "modules": 5
+  },
+  "compose_sha256": "1cb93de5dbce39335b217bd1f561aa8dcae1e022a6273d3bf93dd09d9f65806c",
+  "meta": {
+    "coverage": "runs/2025-10-13-demo-headless/meta/coverage.json",
+    "compose": "runs/2025-10-13-demo-headless/meta/compose.json",
+    "report": "runs/2025-10-13-demo-headless/meta/report.json",
+    "events": "runs/2025-10-13-demo-headless/meta/meta.events.ndjson"
+  },
+  "updated_at": "2025-10-13T21:54:41.551Z",
+  "selection": {
+    "variant": 0,
+    "rationale": "auto-selected variant var0 from compose module set (ignored 1 extra module)",
+    "recorded_at": "2025-10-13T21:54:41.520Z",
+    "confirmed_at": "2025-10-13T21:54:45.717Z"
+  },
+  "winner": {
+    "dir": "runs/2025-10-13-demo-headless/winner",
+    "generated_at": "2025-10-13T21:54:45.716Z"
+  },
+  "gates": {
+    "events": "runs/2025-10-13-demo-headless/artifacts/events.ndjson",
+    "raw_events": "runs/2025-10-13-demo-headless/artifacts/events.gates.ndjson",
+    "variant": 0,
+    "completed_at": "2025-10-13T21:54:45.717Z",
+    "status": "passed"
+  }
+}

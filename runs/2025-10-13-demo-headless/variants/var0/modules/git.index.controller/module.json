@@ -1,0 +1,33 @@
+{
+  "id": "git.index.controller",
+  "version": "0.1.0",
+  "summary": "Stage/unstage/add/reset controller (example)",
+  "provides": [
+    "IndexPort@1"
+  ],
+  "requires": [],
+  "inputs": {},
+  "outputs": {},
+  "side_effects": [
+    "Process:git",
+    "FS:read",
+    "FS:write"
+  ],
+  "invariants": [
+    "idempotent(effect-free calls)"
+  ],
+  "tests": [
+    "tests/spec_index.json"
+  ],
+  "port_exports": {
+    "IndexPort@1": { "file": "src/index.ts", "export": "indexPort" }
+  },
+  "evidence": [
+    {
+      "kind": "file",
+      "file": "src/lib.rs",
+      "lines": "1-20",
+      "note": "example placeholder"
+    }
+  ]
+}

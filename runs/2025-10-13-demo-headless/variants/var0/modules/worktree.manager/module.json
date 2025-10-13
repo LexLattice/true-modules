@@ -1,0 +1,18 @@
+{
+  "id": "worktree.manager",
+  "version": "0.1.0",
+  "summary": "Stub worktree manager for headless smoke tests",
+  "provides": ["WorktreePort@1"],
+  "requires": [],
+  "inputs": {},
+  "outputs": {},
+  "side_effects": [],
+  "invariants": ["noop invariant"],
+  "tests": ["script:tests/pass.mjs"],
+  "port_exports": {
+    "WorktreePort@1": { "file": "src/index.ts", "export": "handler" }
+  },
+  "evidence": [
+    { "kind": "test", "note": "Headless stub" }
+  ]
+}
