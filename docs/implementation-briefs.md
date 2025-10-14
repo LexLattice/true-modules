@@ -492,3 +492,128 @@ Wave 6 closes out the first loop by exposing `tm` through an MCP façade and p
 * 2nd run on unchanged examples shows measurable speedup; durations visible in events and CI logs.
 
 ---
+
+
+## F1–F2 — MCP Integration Tests · Python Shim
+
+**Objective**: guarantee the MCP façade stays in lock-step with the CLI, and give non-Node agents a thin Python wrapper.
+
+**Key files**:
+`mcp/tests/smoke.mjs` (new), `.github/workflows/mcp-smoke.yml` (new) · `python/tm_cli.py` (new), `python/README.md` (new) · minor updates in `package.json`, `docs/mcp.md`, `README.md`.
+
+**Implementation steps**:
+
+1. **MCP smoke test**
+
+   * Script `mcp/tests/smoke.mjs`:
+
+     * Boot `node mcp/server.mjs` on stdio (ephemeral tmp dir).
+     * Call three tools with minimal payloads:
+
+       * `tm.meta({ coverage })` → assert JSON shape + schema.
+       * `tm.compose({ compose, modulesRoot })` → assert BoM.
+       * `tm.gates({ mode, compose, modulesRoot })` → assert `{ pass: boolean }` and events exist.
+     * Ensure temp dirs cleaned; server process exited.
+   * CI job `mcp-smoke.yml`:
+
+     * Install deps → run smoke script → upload sample responses under `artifacts/mcp/`.
+
+2. **Python shim**
+
+   * `python/tm_cli.py`:
+
+     * Subprocess wrapper around `node tm.mjs` for `meta/compose/gates`.
+     * STDIN/STDOUT pure JSON; return non-zero on CLI error, propagate error code fields.
+   * `python/README.md`:
+
+     * Usage examples (venv/pipx), sample calls, error handling patterns.
+
+**Acceptance**:
+
+* CI `mcp-smoke` passes and publishes example payloads.
+* `python/tm_cli.py` can run `gates shipping` on the examples and prints JSON identical in structure to Node.
+* Docs updated with quick start links; `README` points to MCP + Python sections.
+
+---
+
+## F3–F4 — `tm doctor` · `tm init` · Winner Publish (npm-pack)
+
+**Objective**: one-shot environment diagnostics + repo bootstrap, and an optional publishable winner artifact.
+
+**Key files**:
+`tm.mjs` (new commands), `templates/init/**` (new), `docs/contributor-playbook.md` (update), `docs/composer.md` (update), CI workflow extension.
+
+**Implementation steps**:
+
+1. **`tm doctor`**
+
+   * Checks: Node/Rust versions, `typescript`/`eslint` availability, AJV compile, file perms, `git` present.
+   * Output: human + machine-readable JSON (`--json`), actionable hints.
+
+2. **`tm init`**
+
+   * Drops a minimal skeleton: `modules/`, example module, `spec/`, CI file, `docs/links.md`.
+   * Optional flags: `--ts` to add TS config; `--mcp` to add façade stub wiring.
+
+3. **Winner publish path**
+
+   * `gates shipping --npm-pack`: pack `winner/` into a tarball; store at `artifacts/winner.tgz`.
+   * On failure, exit with `E_NPM_PACK`; include artifact log pointer.
+   * `docs/composer.md`: short “pack smoke” section and consumption notes.
+
+4. **CI**
+
+   * Add `doctor` step (non-blocking warn mode) and a `npm-pack` smoke on examples.
+
+**Acceptance**:
+
+* `tm doctor` detects missing tools and prints remediation; `--json` returns a stable schema.
+* `tm init` repo passes **conceptual** gates OOTB; instructions link to the playbook.
+* `--npm-pack` creates `artifacts/winner.tgz` on examples; failure blocks shipping gates with clear code.
+
+---
+
+## F5–F6 — Events Summary/Viz · Auto Lessons Hook
+
+**Objective**: turn events into actionable dashboards and keep organizational memory fresh automatically.
+
+**Key files**:
+`scripts/events-summarize.mjs` (new), `tm.mjs` (`events summary` subcommand, new) · `scripts/lessons-auto.sh` (new), `.github/workflows/lessons.yml` (new) · `docs/events.md`, `docs/lessons.md` (update).
+
+**Implementation steps**:
+
+1. **Summaries & viz**
+
+   * `scripts/events-summarize.mjs`:
+
+     * Read NDJSON → compute: gate durations, fail codes histogram, slowest tests, pass/fail by module.
+     * Emit `artifacts/summary.json` + `artifacts/summary.md` (TTY table).
+   * `tm events summary --in <ndjson>`: thin wrapper to the script (prints to stdout).
+
+2. **Auto lessons**
+
+   * `scripts/lessons-auto.sh`:
+
+     * Run `tm lessons mine --from "**/report.json" --out lessons.json`.
+     * Option A: commit changes on merge (bot user); Option B: upload artifact (no write).
+   * CI workflow `lessons.yml`:
+
+     * Trigger: `push` to `main` → mine → (commit or artifact).
+
+3. **Docs**
+
+   * `docs/events.md`: add “How to read the summary” with examples.
+   * `docs/lessons.md`: recommend seeding next prompts from `lessons.json`.
+
+**Acceptance**:
+
+* Running `tm events summary --in artifacts/events.ndjson` prints a concise table and writes both summary files.
+* CI publishes `summary.*` and `lessons.json` as artifacts; commit option (if chosen) updates `lessons.json` on main without conflicts.
+
+---
+
+### Hand-off tips
+
+* Keep **stdout** machine-readable where applicable; route human summaries to **stderr** when `--emit-events` is active.
+* Emit stable **error codes** on all new failure paths (`E_NPM_PACK`, `E_SUMMARY_PARSE`, `E_LESSONS_WRITE`).
+* Prefer **append-safe** file sinks under `artifacts/` and deterministic filenames.
