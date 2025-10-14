@@ -104,3 +104,34 @@ Records of tournament outcomes and review insights once a pull request wraps. Ea
 - **Follow-ups / TODOs**:
   - Capture additional coverage fixtures for determinism validation.
   - Consider archiving meta diff outputs to ease debugging when CI fails.
+
+## E2 — Headless Codex Cloud Kit
+- **Winner**: `codex/implement-headless-bo4-execution-pipeline` (commit `bc2eb7810533c0e596d9bb21bbb9bad03b1e4ec0`)
+- **Why it won**:
+  - Delivered the full watcher → harvest → meta → compose → gates loop as standalone scripts (`codex-watch.mjs`, `bo4-harvest.mjs`, `bo4-meta-run.mjs`, `bo4-compose.mjs`, `bo4-apply.sh`) with a shared `run.json` manifest and hardened module validation (`E_VARIANT_NO_MODULES` exits).
+  - Added an orchestrator (`bo4-loop.mjs`) plus CI coverage (`headless_cloud` job) that runs against a stubbed Codex Cloud (`CODEX_BIN=node scripts/tests/codex-cloud-stub.mjs`) and validates event telemetry.
+  - Documented the workflow (`docs/cloud-headless.md`) and clarified that exported variants live under `.codex-cloud/variants/<task_id>/varN/` to keep the repo clean while maintaining durable artifacts.
+  - Shored up the CLI after review: removed `shell: true` spawns, introduced `resolveCommand` so multi-word `CODEX_BIN` values work safely, and extracted a reusable manifest helper for the apply script.
+- **Imports pulled in**: Borrowed the recursive True Module checks and winner selection rationale from the stronger Wave 8 submissions while retaining var2’s manifest structure and CI job skeleton.
+- **Why other variants fell short**:
+  - `var1` required a caller-supplied modules path and `rsync`’d the winner into the repo root, making it unsafe for automation.
+  - `var3` overwrote watcher telemetry during gates and never recorded `compose_sha256` at the manifest root.
+  - `var4` left modules outside the manifest, demanded manual `--modules-root`, and didn’t integrate the headless loop into CI.
+- **Review feedback addressed**:
+  - Resolved security concerns by eliminating shell-based spawns and adding the new command resolver.
+  - Seeded deterministic fixtures under `examples/cloud-stub/variants/var0/` with matching coverage (`examples/coverage.json`) so the CI job stops looping.
+  - Updated `.gitignore` and docs to account for the out-of-repo variant archive while still tracking the stub fixtures needed for tests.
+- **Tradeoffs**:
+  - The command splitter is intentionally simple; complex quoting (nested quotes, environment substitutions) will need future hardening.
+  - The stub variant reuses production module sources, increasing fixture surface area but allowing end-to-end smoke tests without Codex Cloud access.
+  - Storing artifacts under `.codex-cloud` avoids repo churn at the cost of extra coordination when other tools expect in-repo diffs.
+- **Open questions**:
+  - Should we add automated cleanup or rotation for `.codex-cloud/variants` to avoid stale artifacts?
+  - Do we want richer stub tasks (multiple variants, failure cases) to exercise branching paths in CI?
+- **Residual risks**:
+  - Changes to module IDs or coverage goals require manual fixture regeneration; CI will fail noisily if the stub drifts.
+  - `resolveCommand` currently handles only basic whitespace/quote patterns; unusual shells or Windows paths may still break.
+- **Follow-ups / TODOs**:
+  - Capture at least one failing/headless gate scenario in fixtures to keep the error-path logic tested.
+  - Explore packaging a helper that syncs `.codex-cloud` artifacts to cloud storage for longer-term retention.
+  - Consider wiring a smoke test that runs `bo4-apply.sh` in mock mode to verify manifest parsing and branch creation do not regress.
