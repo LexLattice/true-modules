@@ -2,6 +2,60 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://true-modules/spec/events.schema.json",
   "title": "tm-events@1",
+  "$defs": {
+    "side_effect_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["declared", "observed_operations", "undeclared_operations", "fs_write", "processes"],
+      "properties": {
+        "declared": { "type": "array", "items": { "type": "string" } },
+        "observed_operations": { "type": "array", "items": { "type": "string" } },
+        "undeclared_operations": { "type": "array", "items": { "type": "string" } },
+        "fs_write": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["count", "outside_module_root", "sample_paths", "outside_samples"],
+          "properties": {
+            "count": { "type": "integer", "minimum": 0 },
+            "outside_module_root": { "type": "boolean" },
+            "sample_paths": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path", "inside_module_root"],
+                "properties": {
+                  "path": { "type": "string" },
+                  "inside_module_root": { "type": "boolean" }
+                }
+              }
+            },
+            "outside_samples": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "processes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["total", "categories"],
+          "properties": {
+            "total": { "type": "integer", "minimum": 0 },
+            "categories": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["count", "sample_commands"],
+                "properties": {
+                  "count": { "type": "integer", "minimum": 0 },
+                  "sample_commands": { "type": "array", "items": { "type": "string" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "event", "ts", "seq", "source", "context"],
@@ -27,7 +81,11 @@
         "PORT_CHECK_START",
         "PORT_CHECK_PASS",
         "PORT_CHECK_FAIL",
-        "META_PICK"
+        "META_PICK",
+        "SIDEEFFECTS_SUMMARY",
+        "ORACLE_START",
+        "ORACLE_PASS",
+        "ORACLE_FAIL"
       ]
     },
     "ts": { "type": "string", "format": "date-time" },
@@ -83,8 +141,12 @@
         "lint_tool": { "type": "string" },
         "file": { "type": "string" },
         "line": { "type": "integer", "minimum": 0 },
+        "spec": { "type": "string" },
+        "case": { "type": "string" },
+        "attempts": { "type": "integer", "minimum": 1 },
         "passed": { "type": "integer", "minimum": 0 },
         "failed": { "type": "integer", "minimum": 0 },
+        "side_effects": { "$ref": "#/$defs/side_effect_summary" },
         "added": {
           "type": "object",
           "additionalProperties": false,

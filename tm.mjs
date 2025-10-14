@@ -2124,7 +2124,7 @@ program
         summary.side_effects = final;
         if (ee) {
           for (const [moduleId, data] of Object.entries(final.modules || {})) {
-            await ee.emit('SIDEEFFECTS_SUMMARY', { module: moduleId, ...data });
+            await ee.emit('SIDEEFFECTS_SUMMARY', { module: moduleId, side_effects: data });
           }
         }
       }
