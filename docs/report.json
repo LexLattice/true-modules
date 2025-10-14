@@ -1,93 +1,92 @@
 {
-  "summary": "Hardened the headless BO4 loop by validating harvested modules, persisting meta selections, and forcing compose/gates to honor the recorded winner.",
+  "summary": "Validated oracle specs against a shared schema, expanded gate telemetry with side-effect summaries, and made the CLI default to bundled specs while skipping gracefully when no files match.",
   "checklist": [
     {
       "id": "P1",
       "status": "implemented",
-      "notes": "Added recursive module.json detection during harvest, recorded meta winner rationale, and aligned compose/apply to the manifest selection."
+      "notes": "Added oracle schema validation, richer side-effect reporting during gates, and CLI defaults for bundled specs with skip messaging."
     }
   ],
   "architecture": {
-    "components_added": [],
-    "components_modified": [
+    "components_added": [
       {
-        "path": "scripts/bo4-harvest.mjs",
-        "reason": "Recursively inspects modules/ for module.json files and records harvested module ids for downstream selection."
+        "name": "side-effects evaluator",
+        "path": "scripts/lib/side-effects.mjs",
+        "role": "workflow"
       },
       {
-        "path": "scripts/bo4-meta-run.mjs",
-        "reason": "Loads the harvest manifest to persist the winning variant and rationale after meta scoring."
-      },
-      {
-        "path": "scripts/bo4-compose.mjs",
-        "reason": "Requires run.json.selection.variant and fails fast when the manifest lacks an explicit winner."
-      },
-      {
-        "path": "scripts/bo4-loop.mjs",
-        "reason": "Propagates CLI variant overrides into the meta stage for consistent selection."
-      },
-      {
-        "path": "scripts/bo4-apply.sh",
-        "reason": "Reads run.json.selection.variant instead of the old selected field before applying the winner."
+        "name": "oracle spec schema",
+        "path": "spec/oracle.schema.json",
+        "role": "infra"
       }
     ],
-    "data_flow": "Harvest records module ids per variant, meta maps compose outputs back to those ids to select a winner, and compose/gates consume the chosen variant exclusively.",
-    "state_management": "run.json now owns a selection object with variant, rationale, and timestamps while harvest augments each variant entry with module id metadata.",
+    "components_modified": [
+      {
+        "path": "tm.mjs",
+        "reason": "Validate oracle specs, aggregate per-module side-effect telemetry, and emit richer gate summaries."
+      },
+      {
+        "path": "docs/oracles.md",
+        "reason": "Document schema validation, CLI defaults, and the new side-effect telemetry blocks."
+      }
+    ],
+    "data_flow": "Oracle specs are validated via Ajv before execution; shipping tests and oracles feed side-effect events into a per-module accumulator that emits telemetry and populates the gate summary.",
+    "state_management": "Gate summaries cache aggregated side-effect observations keyed by module until publishing at the end of the run.",
     "invariants": [
-      "Harvest exits with E_VARIANT_NO_MODULES when modules/ is missing or lacks module.json files.",
-      "Compose and apply only proceed when run.json.selection.variant matches a harvested variant."
+      "Invalid oracle specs fail with E_ORACLE_SPEC prior to running any scripts.",
+      "Side-effect summaries must never report filesystem writes outside a module root without triggering E_SIDEEFFECTS_FORBIDDEN."
     ],
     "tradeoffs": [
-      "Strict selection enforcement blocks compose until meta runs successfully but prevents silent drift to the wrong variant."
+      "Limiting side-effect samples to the first few paths/commands keeps telemetry lightweight but may omit later operations."
     ],
     "alternatives_considered": [
       {
-        "option": "Fallback to the first harvested variant when no selection is recorded",
-        "rejected_because": "Would allow compose/gates to run against the wrong module set and hide meta failures."
+        "option": "Defer schema validation until after running each case",
+        "rejected_because": "Errors would surface mid-run with partial telemetry instead of providing actionable upfront feedback."
       }
     ],
     "open_questions": [
-      "Should we persist additional module metadata (e.g., hashes) to disambiguate variants with identical module id sets?"
+      "Should oracle executions emit their own aggregated side-effect summaries similar to gates?"
     ]
   },
   "tests": {
     "added": [],
-    "how_to_run": "CODEX_BIN=\"node scripts/tests/codex-cloud-stub.mjs\" node scripts/bo4-loop.mjs --task demo --coverage examples/cloud-stub/tasks.json"
+    "how_to_run": "node tm.mjs gates shipping --compose examples/compose.json --modules-root examples/modules --with-oracles --oracle-spec oracles/specs/git.diff.core.json"
   },
   "metrics": {
-    "files_changed": 7,
-    "insertions": 206,
-    "deletions": 70
+    "files_changed": 5,
+    "insertions": 525,
+    "deletions": 136
   },
   "decisions": [
     {
-      "option": "Infer the winning variant from compose output and persist it under run.json.selection",
-      "rationale": "Ensures downstream compose/gates operate on the same module set that meta approved.",
+      "option": "Validate oracle specs with JSON Schema before execution",
+      "rationale": "Catching authoring mistakes early avoids running flaky or malformed scripts and provides clearer diagnostics for operators.",
       "rejected_alternatives": [
         {
-          "variant": "Manual compose variant override",
-          "reason": "Relies on operator input and can desynchronize the manifest from meta results.",
+          "variant": "Rely on manual normalization errors",
+          "reason": "Normalization misses structural issues (e.g. wrong property types) that schema validation detects immediately.",
           "confidence": 0.5
         }
       ]
     }
   ],
   "risks": [
-    "Variants with identical module ids may still require manual --variant overrides until additional tie-breakers exist."
+    "Schema or telemetry changes may require future adjustments as new oracle fields are introduced."
   ],
   "residual_risks": [
-    "A failed meta run leaves run.json without selection timestamps, blocking compose until rerun."
+    "Aggregated side-effect telemetry could still miss edge cases when modules spawn many unique commands beyond the sample limit."
   ],
   "followups": [
     {
-      "title": "Add tie-breaker metadata to differentiate variants that share module ids",
+      "title": "Surface side-effect summaries for standalone oracle runs",
       "priority": "P2",
       "owner": "Platform",
-      "pointer": "scripts/bo4-harvest.mjs#L1"
+      "pointer": "tm.mjs#runOracles"
     }
   ],
   "todos": [
-    "Surface harvest module id counts in human-readable status output."
+    "Expose configuration for side-effect sample limits if teams need deeper telemetry."
   ],
   "confidence": 0.6
 }

@@ -1,0 +1,17 @@
+{
+  "module": "git.diff.alt",
+  "cases": [
+    {
+      "name": "nondeterministic-output",
+      "entry": "tests/oracle_nondeterministic.mjs",
+      "cwd": "tests",
+      "repeat": 2,
+      "reset": ["oracle-nondet.txt"],
+      "capture": {
+        "stdout": true,
+        "stderr": true,
+        "files": ["oracle-nondet.txt"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "True Modules oracle spec",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["module", "cases"],
+  "properties": {
+    "module": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entry"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "entry": {
+            "type": "string",
+            "minLength": 1
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": ["string", "number", "integer", "boolean"]
+            }
+          },
+          "repeat": {
+            "type": "integer",
+            "minimum": 2
+          },
+          "runs": {
+            "type": "integer",
+            "minimum": 2
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "capture": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "stdout": { "type": "boolean" },
+              "stderr": { "type": "boolean" },
+              "side_effects": { "type": "boolean" },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "reset": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "cwd": {
+            "type": "string",
+            "minLength": 1
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": {
+              "type": ["string", "number", "integer", "boolean"]
+            }
+          }
+        }
+      }
+    }
+  }
+}

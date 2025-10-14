@@ -12,7 +12,8 @@
   "outputs": {},
   "side_effects": [
     "Process:git",
-    "FS:read"
+    "FS:read",
+    "FS:write"
   ],
   "invariants": [
     "deterministic(outputs | inputs)",
