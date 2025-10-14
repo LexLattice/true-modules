@@ -5,6 +5,8 @@ import process from 'node:process';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import os from 'node:os';
+import { once } from 'node:events';
 
 import { tools } from '../server.mjs';
 
@@ -20,7 +22,7 @@ const defaultLogger = {
 };
 
 async function listTmpEntries() {
-  const entries = await fs.readdir('/tmp');
+  const entries = await fs.readdir(os.tmpdir());
   return entries.filter((entry) => entry.startsWith('tm-mcp-')).sort();
 }
 
@@ -57,8 +59,24 @@ async function ensureServerBoots(modulesRoot) {
     });
   });
 
-  // Give the server a moment to initialise before shutting it down.
-  await delay(500);
+  const readiness = await Promise.race([
+    once(child.stdout, 'data').then(() => ({ type: 'ready' })),
+    once(child.stderr, 'data').then(() => ({ type: 'ready' })),
+    once(child, 'exit').then(([code, signal]) => ({ type: 'exit', code, signal, stdout, stderr })),
+    delay(2_000).then(() => ({ type: 'timeout' }))
+  ]);
+
+  if (readiness.type === 'exit') {
+    const { code, signal } = readiness;
+    const error = new Error(`MCP server exited before emitting output (code ${code}, signal ${signal ?? 'null'})`);
+    error.stdout = stdout;
+    error.stderr = stderr;
+    throw error;
+  }
+  if (readiness.type === 'timeout') {
+    throw new Error('Timed out waiting for MCP server to emit startup output.');
+  }
+
   child.kill('SIGTERM');
   await exitPromise;
 }
@@ -122,9 +140,9 @@ async function run() {
   const leaked = [...afterSet].filter((entry) => !beforeSet.has(entry));
   const removed = [...beforeSet].filter((entry) => !afterSet.has(entry));
   if (leaked.length || removed.length) {
-    let message = 'MCP server run modified /tmp entries prefixed with tm-mcp-.';
+    let message = `MCP server run modified ${os.tmpdir()} entries prefixed with tm-mcp-.`;
     if (leaked.length) {
-      const leakedPaths = leaked.map((entry) => path.join('/tmp', entry)).join('\n - ');
+      const leakedPaths = leaked.map((entry) => path.join(os.tmpdir(), entry)).join('\n - ');
       message += `\nLeaked directories:\n - ${leakedPaths}`;
     }
     if (removed.length) {

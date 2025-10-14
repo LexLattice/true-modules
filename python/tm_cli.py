@@ -124,7 +124,7 @@ def run_tm(cli_args: Iterable[str], *, node_bin: str) -> subprocess.CompletedPro
 
 def write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2))
+    path.write_text(json.dumps(payload))
 
 
 def read_json(path: Path) -> Dict[str, Any]:
