@@ -1,86 +1,70 @@
 {
-  "summary": "Added explicit port-major negotiation, phase telemetry, and smarter caching so repeated gates finish faster while SafetyPort tests cover more OS-specific edges; ensured skipped tests still surface their side-effect audits.",
+  "summary": "Hardened the MCP smoke test to detect leaked tm-mcp-* directories in /tmp and added a --pretty flag to the Python shim for formatted JSON output.",
   "checklist": [
     {
       "id": "P1",
       "status": "implemented",
-      "notes": "Composer now enforces single port major selections and gates emit detailed timing with skip awareness."
+      "notes": "Smoke test now snapshots tm-mcp-* entries in /tmp and fails on leaks; Python shim exposes --pretty to control JSON indentation."
     }
   ],
   "architecture": {
     "components_added": [],
     "components_modified": [
       {
-        "path": "tm.mjs",
-        "reason": "Track phase durations, skip-aware tests, incremental TypeScript runs, and emit side-effect summaries on TEST_SKIPPED."
+        "path": "mcp/tests/smoke.mjs",
+        "reason": "Tracks prefixed /tmp directories before and after the run to surface leaks."
       },
       {
-        "path": "runtimes/ts/composer/index.mjs",
-        "reason": "Avoid redundant winner copies by hashing module and glue directories."
-      },
-      {
-        "path": "scripts/lib/provider-analysis.mjs",
-        "reason": "Resolve port majors with explicit policies and surface inactive providers."
+        "path": "python/tm_cli.py",
+        "reason": "Extends argument parsing and JSON emission to honor a --pretty option."
       }
     ],
-    "data_flow": "Gates capture start/stop times per phase, emit a GATES_SUMMARY event, propagate skipped test metadata with side-effect summaries, while composer caches port copy decisions via hash digests.",
-    "state_management": "Telemetry accumulates phase results in-memory until summary emission; ESLint and TypeScript reuse .tm caches while the composer persists directory hashes in winner/.tm/copy-hashes.json.",
+    "data_flow": "Smoke script snapshots /tmp/tm-mcp-* directories surrounding the fa\u00e7ade boot, while the Python shim routes tm CLI responses through a shared JSON dump that can indent output when requested.",
+    "state_management": "Both changes operate on ephemeral snapshots (lists of directory names or transient CLI payloads); no persistent state is introduced.",
     "invariants": [
-      "Exactly one port major per PortName is active in a plan after negotiation."
+      "/tmp entries prefixed with tm-mcp- remain unchanged across the smoke run.",
+      "python/tm_cli.py must always emit valid JSON on stdout regardless of formatting mode."
     ],
     "tradeoffs": [
-      "Hashing winner directories adds upfront cost but prevents repeated full copies when inputs are unchanged."
+      "Snapshotting names instead of filesystem metadata may miss changes to directory contents but keeps the check lightweight."
     ],
     "alternatives_considered": [
       {
-        "option": "Always re-copy module directories without hashing",
-        "rejected_because": "Would keep behaviour simple but forfeits performance wins on large trees.",
-        "confidence": 0.5
+        "option": "Automatically delete unexpected tm-mcp-* directories during the test",
+        "rejected_because": "Would hide regressions in server cleanup behaviour that we want to detect."
       }
     ],
     "open_questions": []
   },
   "tests": {
-    "added": [
-      "examples/modules/safety.validation/tests/runner.mjs",
-      "examples/modules/safety.validation/tests/run_win_cases.mjs"
-    ],
-    "how_to_run": "node tm.mjs gates shipping --compose examples/compose.greedy.json --modules-root examples/modules --overrides examples/compose.overrides/overrides.json --emit-events --events-out tmp/test-events.ndjson --events-truncate --strict-events"
+    "added": [],
+    "how_to_run": "node mcp/tests/smoke.mjs"
   },
   "metrics": {
-    "files_changed": 2,
-    "insertions": 9,
-    "deletions": 5
+    "files_changed": 3,
+    "insertions": 63,
+    "deletions": 26
   },
   "decisions": [
     {
-      "option": "Emit a GATES_SUMMARY event with per-phase durations",
-      "rationale": "Provides structured telemetry so CI can compare warm-cache runs and surface skips.",
+      "option": "Fail the smoke test on tm-mcp-* leaks and support pretty JSON output in the Python shim",
+      "rationale": "Catching temporary directory leaks protects CI hosts, and the pretty flag improves ergonomics without breaking automation.",
       "rejected_alternatives": [
         {
-          "variant": "Log durations only to stdout",
-          "reason": "Hard for automation to parse and compare runs reliably.",
-          "confidence": 0.4
+          "variant": "Leave the smoke test as-is and rely on manual checks",
+          "reason": "Would miss regression coverage and keep Python responses less readable when debugging.",
+          "confidence": 0.3
         }
       ]
     }
   ],
   "risks": [
-    "Directory hashing could still be expensive on extremely large winners."
+    "Legitimate external processes creating tm-mcp-* directories during the run could trigger false positives."
   ],
   "residual_risks": [
-    "GATES_SUMMARY consumers must handle the new event before relying on durations."
+    "Pretty output still depends on downstream tooling tolerating multi-line JSON."
   ],
-  "followups": [
-    {
-      "title": "Benchmark composer hashing on large module sets",
-      "priority": "P2",
-      "owner": "runtime",
-      "pointer": "runtimes/ts/composer/index.mjs#L1"
-    }
-  ],
-  "todos": [
-    "Consider persisting directory hashes across runs outside the winner workspace for faster diffing."
-  ],
+  "followups": [],
+  "todos": [],
   "confidence": 0.6
 }

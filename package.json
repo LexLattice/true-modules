@@ -13,7 +13,8 @@
     "meta": "node tm.mjs meta --coverage ./examples/coverage.json --out ./examples/compose.greedy.json",
     "module": "node tm.mjs module --new",
     "lessons": "node tm.mjs lessons mine --from \\\"docs/**/*.json winner/report.json\\\" --out lessons.json",
-    "mcp:server": "node mcp/server.mjs"
+    "mcp:server": "node mcp/server.mjs",
+    "mcp:smoke": "node mcp/tests/smoke.mjs"
   },
   "devDependencies": {
     "@typescript-eslint/parser": "^7.18.0",

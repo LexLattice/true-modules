@@ -1,0 +1,53 @@
+name: MCP smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mcp/**'
+      - 'examples/**'
+      - 'tm.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/mcp-smoke.yml'
+      - 'docs/**'
+      - 'python/**'
+  pull_request:
+    paths:
+      - 'mcp/**'
+      - 'examples/**'
+      - 'tm.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/mcp-smoke.yml'
+      - 'docs/**'
+      - 'python/**'
+
+jobs:
+  smoke:
+    name: Smoke test MCP façade
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run MCP smoke script
+        run: node mcp/tests/smoke.mjs
+
+      - name: Upload smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-smoke
+          path: artifacts/mcp
+          if-no-files-found: warn

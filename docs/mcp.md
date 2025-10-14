@@ -188,6 +188,36 @@ Execute conceptual or shipping gates (`mode` defaults to `shipping`). Attach `ov
 }
 ```
 
+### Automated smoke tests
+
+The repository ships with `mcp/tests/smoke.mjs`, a Node.js script that boots the
+façade, exercises `tm.meta`, `tm.compose`, and `tm.gates`, and writes the sample
+responses under `artifacts/mcp/`. CI runs the script on every push/PR via
+`.github/workflows/mcp-smoke.yml` and publishes the JSON payloads as build
+artifacts so you can diff the façade output across commits. To run it locally:
+
+```bash
+node mcp/tests/smoke.mjs
+ls artifacts/mcp
+# compose.json  gates.json  meta.json
+```
+
+### Python shim
+
+Agents that cannot shell out with Node.js can pipe requests through the
+lightweight wrapper in [`python/tm_cli.py`](../python/README.md). The shim reads a
+JSON payload from STDIN, invokes the CLI, and prints the structured response to
+STDOUT while forwarding the human-facing logs to STDERR.
+
+```bash
+# Compose example with a modules root override
+jq '{compose: .}' examples/compose.json \
+  | python python/tm_cli.py compose --modules-root ./examples/modules
+```
+
+See [`python/README.md`](../python/README.md) for end-to-end examples and error
+handling patterns.
+
 ### Smoke-test scripts
 
 Run the façade directly with inline payloads to confirm the new arguments end-to-end:
