@@ -1,0 +1,27 @@
+{
+  "module": "git.diff.core",
+  "cases": [
+    {
+      "name": "runner-tracked-deterministic",
+      "entry": "tests/runner.mjs",
+      "args": ["--spec", "tests/spec_diff_tracked.json", "--moduleRoot", "."],
+      "repeat": 3,
+      "capture": {
+        "stdout": true,
+        "stderr": true
+      }
+    },
+    {
+      "name": "repeatable-io",
+      "entry": "tests/oracle_repeatable.mjs",
+      "cwd": "tests",
+      "repeat": 2,
+      "reset": ["oracle-output.txt"],
+      "capture": {
+        "stdout": true,
+        "stderr": true,
+        "files": ["oracle-output.txt"]
+      }
+    }
+  ]
+}

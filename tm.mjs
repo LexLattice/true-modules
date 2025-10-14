@@ -10,6 +10,7 @@ import { spawn } from 'child_process';
 import crypto from 'crypto';
 import { collectCrossImportDiagnostics } from './scripts/eslint-run.mjs';
 import { tmError, analyzeProviders } from './scripts/lib/provider-analysis.mjs';
+import { evaluateSideEffects } from './scripts/lib/side-effects.mjs';
 import { validateEventsFile } from './scripts/events-validate.mjs';
 import { replayEvents } from './scripts/events-replay.mjs';
 
@@ -284,7 +285,8 @@ async function runCmd(cmd, args, opts = {}) {
     const child = spawn(cmd, args, {
       cwd: opts.cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
-      shell: false
+      shell: false,
+      env: opts.env ? { ...process.env, ...opts.env } : process.env
     });
     let out = '', err = '';
     const timer = setTimeout(() => {
@@ -316,6 +318,471 @@ async function runCmd(cmd, args, opts = {}) {
       }
     });
   });
+}
+
+const SIDE_EFFECTS_GUARD = path.join(__dirname, 'scripts', 'side-effects-guard.mjs');
+const SIDE_EFFECTS_DIR = path.join(process.cwd(), '.tm', 'side-effects');
+
+function sanitizeSegment(value, fallback) {
+  const text = String(value ?? '').replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+/, '').replace(/_+$/, '');
+  if (text.length === 0) return fallback;
+  return text.slice(0, 80);
+}
+
+async function prepareSideEffectsLog(moduleId, caseName) {
+  await fs.mkdir(SIDE_EFFECTS_DIR, { recursive: true });
+  const modulePart = sanitizeSegment(moduleId, 'module');
+  const casePart = sanitizeSegment(caseName, 'case');
+  const logPath = path.join(SIDE_EFFECTS_DIR, `${modulePart}__${casePart}.log`);
+  await fs.rm(logPath, { force: true }).catch(() => {});
+  return logPath;
+}
+
+async function runNodeWithSideEffectsGuard({ scriptPath, args = [], cwd, timeoutMs, env = {}, moduleId, caseName }) {
+  if (!moduleId) {
+    throw tmError('E_SIDEEFFECTS_INTERNAL', 'Side-effects guard requires module id');
+  }
+  const logPath = await prepareSideEffectsLog(moduleId, caseName || path.basename(scriptPath));
+  const finalArgs = ['--import', SIDE_EFFECTS_GUARD, scriptPath, ...args];
+  const spawnEnv = {
+    TM_SIDEEFFECTS_LOG: logPath,
+    TM_SIDEEFFECTS_MODULE: moduleId,
+    TM_SIDEEFFECTS_CASE: caseName || path.basename(scriptPath),
+    ...env
+  };
+  const result = await runCmd(process.execPath, finalArgs, { cwd, timeoutMs, env: spawnEnv });
+  return { ...result, logPath };
+}
+
+async function readSideEffectEvents(logPath) {
+  if (!logPath) return [];
+  try {
+    const text = await fs.readFile(logPath, 'utf8');
+    if (!text.trim()) return [];
+    const lines = text.split(/\r?\n/).filter(Boolean);
+    const events = [];
+    for (const line of lines) {
+      try {
+        const parsed = JSON.parse(line);
+        events.push(parsed);
+      } catch {
+        events.push({ type: 'parse_error', raw: line });
+      }
+    }
+    return events;
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return [];
+    throw err;
+  }
+}
+
+const SIDEEFFECT_SAMPLE_LIMIT = 5;
+
+function createSideEffectsAccumulator(sampleLimit = SIDEEFFECT_SAMPLE_LIMIT) {
+  return { map: new Map(), sampleLimit };
+}
+
+function recordSideEffectsObservation(acc, moduleId, summary) {
+  if (!acc || !moduleId || !summary) return;
+  if (!acc.map.has(moduleId)) {
+    acc.map.set(moduleId, {
+      declared: new Set(),
+      observed: new Set(),
+      missing: new Set(),
+      fsCount: 0,
+      fsOutside: false,
+      fsSamples: [],
+      fsSampleSeen: new Set(),
+      fsOutsideSamples: [],
+      fsOutsideSeen: new Set(),
+      processTotal: 0,
+      processCategories: new Map()
+    });
+  }
+  const entry = acc.map.get(moduleId);
+  for (const value of summary.declared || []) {
+    if (typeof value === 'string' && value) entry.declared.add(value);
+  }
+  for (const value of summary.observed_operations || []) {
+    if (typeof value === 'string' && value) entry.observed.add(value);
+  }
+  for (const value of summary.undeclared_operations || []) {
+    if (typeof value === 'string' && value) entry.missing.add(value);
+  }
+  if (summary.fs_write) {
+    entry.fsCount += Number(summary.fs_write.count || 0);
+    if (summary.fs_write.outside_module_root) entry.fsOutside = true;
+    if (Array.isArray(summary.fs_write.sample_paths)) {
+      for (const sample of summary.fs_write.sample_paths) {
+        if (!sample || typeof sample.path !== 'string') continue;
+        const key = `${sample.path}|${sample.inside_module_root ? '1' : '0'}`;
+        if (!entry.fsSampleSeen.has(key) && entry.fsSamples.length < acc.sampleLimit) {
+          entry.fsSampleSeen.add(key);
+          entry.fsSamples.push({
+            path: sample.path,
+            inside_module_root: Boolean(sample.inside_module_root)
+          });
+        }
+      }
+    }
+    if (Array.isArray(summary.fs_write.outside_samples)) {
+      for (const sample of summary.fs_write.outside_samples) {
+        if (typeof sample !== 'string' || !sample) continue;
+        if (!entry.fsOutsideSeen.has(sample) && entry.fsOutsideSamples.length < acc.sampleLimit) {
+          entry.fsOutsideSeen.add(sample);
+          entry.fsOutsideSamples.push(sample);
+        }
+      }
+    }
+  }
+  if (summary.processes) {
+    entry.processTotal += Number(summary.processes.total || 0);
+    const categories = summary.processes.categories || {};
+    for (const [effect, info] of Object.entries(categories)) {
+      if (!entry.processCategories.has(effect)) {
+        entry.processCategories.set(effect, { count: 0, sample_commands: [], seen: new Set() });
+      }
+      const cat = entry.processCategories.get(effect);
+      cat.count += Number(info?.count || 0);
+      if (Array.isArray(info?.sample_commands)) {
+        for (const cmd of info.sample_commands) {
+          if (typeof cmd !== 'string' || !cmd.trim()) continue;
+          if (!cat.seen.has(cmd) && cat.sample_commands.length < acc.sampleLimit) {
+            cat.seen.add(cmd);
+            cat.sample_commands.push(cmd);
+          }
+        }
+      }
+    }
+  }
+}
+
+function finalizeSideEffectsSummary(acc) {
+  if (!acc || !acc.map || acc.map.size === 0) return null;
+  const modules = {};
+  const sortedEntries = Array.from(acc.map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  for (const [moduleId, entry] of sortedEntries) {
+    const categories = {};
+    const sortedCategories = Array.from(entry.processCategories.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    for (const [effect, info] of sortedCategories) {
+      categories[effect] = {
+        count: info.count,
+        sample_commands: info.sample_commands
+      };
+    }
+    modules[moduleId] = {
+      declared: Array.from(entry.declared).sort(),
+      observed_operations: Array.from(entry.observed).sort(),
+      undeclared_operations: Array.from(entry.missing).sort(),
+      fs_write: {
+        count: entry.fsCount,
+        outside_module_root: entry.fsOutside,
+        sample_paths: entry.fsSamples,
+        outside_samples: entry.fsOutsideSamples
+      },
+      processes: {
+        total: entry.processTotal,
+        categories
+      }
+    };
+  }
+  return { modules };
+}
+
+let oracleSpecValidatorPromise = null;
+
+async function getOracleSpecValidator() {
+  if (!oracleSpecValidatorPromise) {
+    oracleSpecValidatorPromise = (async () => {
+      const ajv = makeAjv();
+      const schemaPath = path.join(specDir, 'oracle.schema.json');
+      const schema = await loadJSON(schemaPath);
+      return ajv.compile(schema);
+    })();
+  }
+  return oracleSpecValidatorPromise;
+}
+
+async function loadOracleSpecFile(specPath) {
+  const rel = path.relative(process.cwd(), specPath) || specPath;
+  let data;
+  try {
+    data = await loadJSON(specPath);
+  } catch (err) {
+    const failure = tmError('E_ORACLE_SPEC', `Failed to read oracle spec ${rel}: ${err?.message || err}`);
+    failure.cause = err;
+    throw failure;
+  }
+  const validate = await getOracleSpecValidator();
+  const valid = validate(data);
+  if (!valid) {
+    const issues = (validate.errors || []).map(err => ({
+      path: err.instancePath || '(root)',
+      message: err.message || 'invalid value'
+    }));
+    const summary = issues.slice(0, 3).map(issue => `${issue.path} ${issue.message}`.trim()).filter(Boolean).join('; ');
+    const failure = tmError('E_ORACLE_SPEC', `Oracle spec ${rel} failed schema validation: ${summary || 'invalid configuration'}`);
+    if (issues.length) {
+      failure.detail = { ...(failure.detail || {}), spec: rel, errors: issues };
+    }
+    throw failure;
+  }
+  return data;
+}
+
+function normalizeOracleCase(raw, index, specPath) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw tmError('E_ORACLE_SPEC', `Oracle case #${index + 1} in ${specPath} must be an object.`);
+  }
+  const nameRaw = typeof raw.name === 'string' ? raw.name.trim() : '';
+  const name = nameRaw || `case_${index + 1}`;
+  const entryRaw = typeof raw.entry === 'string' ? raw.entry.trim() : '';
+  if (!entryRaw) {
+    throw tmError('E_ORACLE_SPEC', `Oracle case ${name} in ${specPath} is missing an "entry" script.`);
+  }
+  let args = [];
+  if (raw.args !== undefined) {
+    if (!Array.isArray(raw.args)) {
+      throw tmError('E_ORACLE_SPEC', `Oracle case ${name} in ${specPath} expects "args" to be an array.`);
+    }
+    args = raw.args.map((value, idx) => {
+      if (value === undefined || value === null) return '';
+      const text = String(value);
+      if (!text.length) {
+        throw tmError('E_ORACLE_SPEC', `Oracle case ${name} arg[${idx}] in ${specPath} must not be empty.`);
+      }
+      return text;
+    });
+  }
+  const repeatRaw = raw.repeat ?? raw.runs ?? 2;
+  let repeat = Number(repeatRaw);
+  if (!Number.isFinite(repeat) || repeat < 2) repeat = 2;
+  repeat = Math.floor(repeat);
+  const timeoutRaw = raw.timeoutMs ?? raw.timeout_ms ?? null;
+  const timeoutMs = Number.isFinite(Number(timeoutRaw)) && Number(timeoutRaw) > 0 ? Number(timeoutRaw) : null;
+  const captureConfig = raw.capture && typeof raw.capture === 'object' ? raw.capture : {};
+  const captureStdout = captureConfig.stdout === false ? false : true;
+  const captureStderr = captureConfig.stderr === false ? false : true;
+  const captureSideEffects = captureConfig.side_effects === false ? false : true;
+  const captureFiles = Array.isArray(captureConfig.files) ? captureConfig.files.map(f => String(f)) : [];
+  const resetPaths = Array.isArray(raw.reset) ? raw.reset.map(p => String(p)) : [];
+  const cwd = typeof raw.cwd === 'string' ? raw.cwd.trim() : null;
+  const env = raw.env && typeof raw.env === 'object' && !Array.isArray(raw.env)
+    ? Object.fromEntries(Object.entries(raw.env).map(([k, v]) => [k, String(v)]))
+    : null;
+
+  return {
+    name,
+    entry: entryRaw,
+    args,
+    repeat,
+    timeoutMs,
+    captureStdout,
+    captureStderr,
+    captureSideEffects,
+    captureFiles,
+    resetPaths,
+    cwd,
+    env
+  };
+}
+
+function normalizeOracleSpec(spec, specPath) {
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
+    throw tmError('E_ORACLE_SPEC', `Oracle spec at ${specPath} must be an object.`);
+  }
+  const moduleId = typeof spec.module === 'string' ? spec.module.trim() : '';
+  if (!moduleId) {
+    throw tmError('E_ORACLE_SPEC', `Oracle spec at ${specPath} is missing a "module" id.`);
+  }
+  if (!Array.isArray(spec.cases) || spec.cases.length === 0) {
+    throw tmError('E_ORACLE_SPEC', `Oracle spec at ${specPath} must define at least one case.`);
+  }
+  const cases = spec.cases.map((raw, idx) => normalizeOracleCase(raw, idx, specPath));
+  return { module: moduleId, cases };
+}
+
+function compareOracleAttempts(attempts, caseConfig) {
+  if (!attempts.length) return null;
+  const first = attempts[0];
+  for (let i = 1; i < attempts.length; i += 1) {
+    const attempt = attempts[i];
+    if (caseConfig.captureStdout && attempt.stdout !== first.stdout) {
+      return { field: 'stdout', attempt: i + 1 };
+    }
+    if (caseConfig.captureStderr && attempt.stderr !== first.stderr) {
+      return { field: 'stderr', attempt: i + 1 };
+    }
+    for (const file of caseConfig.captureFiles) {
+      if ((attempt.files?.[file] ?? null) !== (first.files?.[file] ?? null)) {
+        return { field: `file:${file}`, attempt: i + 1 };
+      }
+    }
+    if (caseConfig.captureSideEffects) {
+      const left = JSON.stringify(attempt.sideEffects || []);
+      const right = JSON.stringify(first.sideEffects || []);
+      if (left !== right) {
+        return { field: 'side_effects', attempt: i + 1 };
+      }
+    }
+  }
+  return null;
+}
+
+async function executeOracleCase({ caseConfig, moduleId, moduleRoot, manifest }) {
+  const entryAbs = path.isAbsolute(caseConfig.entry) ? caseConfig.entry : path.join(moduleRoot, caseConfig.entry);
+  const cwd = caseConfig.cwd ? (path.isAbsolute(caseConfig.cwd) ? caseConfig.cwd : path.join(moduleRoot, caseConfig.cwd)) : moduleRoot;
+  const repeat = Math.max(caseConfig.repeat || 2, 2);
+  const timeoutMs = caseConfig.timeoutMs ?? 60_000;
+  const attempts = [];
+  for (let attempt = 0; attempt < repeat; attempt += 1) {
+    for (const reset of caseConfig.resetPaths) {
+      const target = path.isAbsolute(reset) ? reset : path.join(cwd, reset);
+      await fs.rm(target, { force: true, recursive: true }).catch(() => {});
+    }
+    let runResult;
+    try {
+      runResult = await runNodeWithSideEffectsGuard({
+        scriptPath: entryAbs,
+        args: caseConfig.args,
+        cwd,
+        timeoutMs,
+        moduleId,
+        caseName: caseConfig.name,
+        env: caseConfig.env || undefined
+      });
+    } catch (err) {
+      const failure = tmError(err?.code || 'E_ORACLE_EXEC', err instanceof Error ? err.message : String(err));
+      failure.detail = { module: moduleId, case: caseConfig.name, attempt: attempt + 1 };
+      failure.cause = err;
+      throw failure;
+    }
+    const events = await readSideEffectEvents(runResult.logPath);
+    const evaluation = evaluateSideEffects({ events, moduleId, manifest, moduleRoot });
+    if (evaluation.violation) {
+      const sideErr = evaluation.violation;
+      if (!sideErr.detail || typeof sideErr.detail !== 'object') sideErr.detail = {};
+      sideErr.detail.module = moduleId;
+      sideErr.detail.case = caseConfig.name;
+      sideErr.detail.attempt = attempt + 1;
+      throw sideErr;
+    }
+
+    const capture = {
+      stdout: caseConfig.captureStdout ? runResult.out : null,
+      stderr: caseConfig.captureStderr ? runResult.err : null,
+      files: {},
+      sideEffects: caseConfig.captureSideEffects ? events : []
+    };
+
+    for (const rel of caseConfig.captureFiles) {
+      const abs = path.isAbsolute(rel) ? rel : path.join(cwd, rel);
+      let encoded = null;
+      try {
+        const buf = await fs.readFile(abs);
+        encoded = buf.toString('base64');
+      } catch (err) {
+        if (!(err && err.code === 'ENOENT')) throw err;
+        encoded = null;
+      }
+      capture.files[rel] = encoded;
+    }
+
+    attempts.push(capture);
+  }
+
+  const mismatch = compareOracleAttempts(attempts, caseConfig);
+  if (mismatch) {
+    const err = tmError('E_ORACLE_NONDETERMINISM', `Oracle ${moduleId}#${caseConfig.name} mismatch on ${mismatch.field} (attempt ${mismatch.attempt}).`);
+    err.detail = { module: moduleId, case: caseConfig.name, field: mismatch.field, attempt: mismatch.attempt };
+    throw err;
+  }
+
+  return { attempts: attempts.length };
+}
+
+async function runOracles({ modulesRoot, specPatterns, manifestsById, filterModules, ee, onCase, skipIfEmpty = false }) {
+  const patterns = (specPatterns && specPatterns.length) ? specPatterns : ['oracles/specs/**/*.json'];
+  const resolvedSpecs = new Set();
+  for (const pattern of patterns) {
+    const { matches } = await expandGlob(pattern);
+    for (const match of matches) {
+      resolvedSpecs.add(path.resolve(match));
+    }
+  }
+  const sortedSpecs = Array.from(resolvedSpecs).sort();
+  const plan = [];
+  const matchedSpecs = [];
+  for (const specPath of sortedSpecs) {
+    const spec = await loadOracleSpecFile(specPath);
+    const normalized = normalizeOracleSpec(spec, specPath);
+    if (filterModules && !filterModules.has(normalized.module)) continue;
+    const relSpec = path.relative(process.cwd(), specPath) || specPath;
+    matchedSpecs.push(relSpec);
+    plan.push({ specPath, relSpec, module: normalized.module, cases: normalized.cases });
+  }
+
+  if (plan.length === 0) {
+    if (skipIfEmpty) {
+      return { totalCases: 0, totalAttempts: 0, results: [], matchedSpecs: [] };
+    }
+    throw tmError('E_ORACLE_SPEC', `No oracle specs matched the provided patterns: ${patterns.join(', ')}`);
+  }
+
+  let totalCases = 0;
+  let totalAttempts = 0;
+  const results = [];
+
+  for (const entry of plan) {
+    const moduleRoot = path.join(modulesRoot, entry.module);
+    let manifest = manifestsById?.[entry.module]?.manifest;
+    if (!manifest) {
+      const manifestPath = path.join(moduleRoot, 'module.json');
+      manifest = await validateFile('module.schema.json', manifestPath);
+    }
+    for (const caseConfig of entry.cases) {
+      totalCases += 1;
+      if (ee) {
+        await ee.emit('ORACLE_START', {
+          module: entry.module,
+          case: caseConfig.name,
+          spec: entry.relSpec
+        });
+      }
+      try {
+        const summary = await executeOracleCase({
+          caseConfig,
+          moduleId: entry.module,
+          moduleRoot,
+          manifest
+        });
+        totalAttempts += summary.attempts;
+        results.push({ module: entry.module, case: caseConfig.name, attempts: summary.attempts });
+        if (ee) {
+          await ee.emit('ORACLE_PASS', { module: entry.module, case: caseConfig.name, attempts: summary.attempts });
+        }
+        if (onCase) {
+          onCase({ status: 'pass', module: entry.module, case: caseConfig.name, attempts: summary.attempts });
+        }
+      } catch (err) {
+        const code = err?.code || 'E_ORACLE';
+        if (ee) {
+          await ee.emit('ORACLE_FAIL', {
+            module: entry.module,
+            case: caseConfig.name,
+            code,
+            error: err instanceof Error ? err.message : String(err)
+          });
+        }
+        if (onCase) {
+          onCase({ status: 'fail', module: entry.module, case: caseConfig.name, error: err });
+        }
+        throw err;
+      }
+    }
+  }
+
+  return { totalCases, totalAttempts, results, matchedSpecs };
 }
 
 function verifyPortRequires(compose, manifestsById) {
@@ -1524,6 +1991,54 @@ program
       await ee.close();
     }
   });
+
+const oraclesCmd = program.command('oracles').description('Determinism oracle utilities');
+
+oraclesCmd
+  .command('run')
+  .requiredOption('--modules-root <dir>', 'Root dir of modules')
+  .option(
+    '--spec <pattern>',
+    'Glob pattern for oracle specs (repeatable)',
+    (value, previous) => {
+      const list = Array.isArray(previous) ? previous.slice() : (previous ? [previous] : []);
+      list.push(value);
+      return list;
+    },
+    []
+  )
+  .action(async (opts) => {
+    const modulesRoot = path.resolve(opts.modules_root || opts.modulesRoot);
+    const patterns = (Array.isArray(opts.spec) && opts.spec.length) ? opts.spec : ['oracles/specs/**/*.json'];
+    try {
+      const summary = await runOracles({
+        modulesRoot,
+        specPatterns: patterns,
+        manifestsById: null,
+        filterModules: null,
+        skipIfEmpty: true,
+        onCase: (result) => {
+          if (result.status === 'pass') {
+            console.log(`✓ ${result.module} :: ${result.case} (${result.attempts} attempts)`);
+          } else if (result.status === 'fail') {
+            const message = result.error instanceof Error ? result.error.message : String(result.error);
+            console.error(`✗ ${result.module} :: ${result.case} — ${message}`);
+          }
+        }
+      });
+      if (summary.totalCases === 0) {
+        console.log(`No oracle specs matched patterns: ${patterns.join(', ')}`);
+        return;
+      }
+      console.log(`✓ ${summary.totalCases} oracle cases passed (${summary.totalAttempts} attempts)`);
+    } catch (err) {
+      const code = err?.code || 'E_ORACLE';
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`${code} ${message}`);
+      process.exitCode = 1;
+    }
+  });
+
 program
   .command('gates')
   .argument('<mode>', 'conceptual|shipping')
@@ -1536,6 +2051,16 @@ program
   .option('--strict-events', 'Validate events against tm-events@1 schema (fail fast)', false)
   .option('--hook-cmd <cmd>', 'Run a hook that receives a summary JSON on stdin')
   .option('--timeout-ms <n>', 'Per-test timeout (ms)', '60000')
+  .option('--with-oracles', 'Run determinism oracles after shipping tests', false)
+  .option(
+    '--oracle-spec <pattern>',
+    'Glob pattern for oracle specs (repeatable)',
+    (value, previous) => {
+      const list = Array.isArray(previous) ? previous.slice() : (previous ? [previous] : []);
+      list.push(value);
+      return list;
+    }
+  )
   .option('--npm-pack', 'Run npm pack smoke against winner workspace', false)
   .description('Run conceptual / shipping gates')
   .action(async (mode, opts) => {
@@ -1589,6 +2114,22 @@ program
       mode,
       modules: moduleIds,
       results: { passed: 0, failed: 0 }
+    };
+    const sideEffectsAccumulator = createSideEffectsAccumulator();
+    let sideEffectsPublished = false;
+    const publishSideEffectsSummary = async () => {
+      if (sideEffectsPublished) return summary.side_effects || null;
+      const final = finalizeSideEffectsSummary(sideEffectsAccumulator);
+      if (final) {
+        summary.side_effects = final;
+        if (ee) {
+          for (const [moduleId, data] of Object.entries(final.modules || {})) {
+            await ee.emit('SIDEEFFECTS_SUMMARY', { module: moduleId, side_effects: data });
+          }
+        }
+      }
+      sideEffectsPublished = true;
+      return final;
     };
     let successMessage = '';
     let failureCode = null;
@@ -1711,27 +2252,60 @@ program
             const testStart = Date.now();
             await ee.emit('TEST_START', { module: m.id, test: t });
             try {
+              let scriptAbs;
+              let args = [];
               if (t.startsWith('script:')) {
                 const scriptRel = t.replace(/^script:/, '').trim();
                 if (!scriptRel) throw tmError('E_REQUIRE_UNSAT', 'Script entry missing path');
-                const scriptAbs = path.join(root, scriptRel);
-                await runCmd(process.execPath, [scriptAbs], { cwd: root, timeoutMs });
+                scriptAbs = path.join(root, scriptRel);
+                args = [];
               } else if (t.endsWith('.json')) {
                 const runner = path.join(root, 'tests', 'runner.mjs');
                 await fs.access(runner);
                 const specPath = path.join(root, t);
-                await runCmd(
-                  process.execPath,
-                  [runner, '--spec', specPath, '--moduleRoot', root],
-                  { cwd: root, timeoutMs }
-                );
+                scriptAbs = runner;
+                args = ['--spec', specPath, '--moduleRoot', root];
               } else {
                 throw tmError('E_REQUIRE_UNSAT', `Unknown test entry: ${t}`);
               }
+
+              const { logPath } = await runNodeWithSideEffectsGuard({
+                scriptPath: scriptAbs,
+                args,
+                cwd: root,
+                timeoutMs,
+                moduleId: m.id,
+                caseName: t
+              });
+
+              const events = await readSideEffectEvents(logPath);
+              const evaluation = evaluateSideEffects({ events, moduleId: m.id, manifest, moduleRoot: root });
+              recordSideEffectsObservation(sideEffectsAccumulator, m.id, evaluation.summary);
+              if (evaluation.violation) {
+                const sideErr = evaluation.violation;
+                const dur = Date.now() - testStart;
+                const message = sideErr instanceof Error ? sideErr.message : String(sideErr);
+                failureCode = sideErr?.code || 'E_SIDEEFFECTS';
+                failureDetail = { module: m.id, test: t, ...(sideErr?.detail || {}), side_effects: evaluation.summary };
+                await ee.emit('TEST_FAIL', {
+                  module: m.id,
+                  test: t,
+                  dur_ms: dur,
+                  error: message,
+                  code: failureCode,
+                  side_effects: evaluation.summary
+                });
+                summary.results = { passed, failed: total - passed };
+                throw sideErr;
+              }
+
               const dur = Date.now() - testStart;
               passed += 1;
-              await ee.emit('TEST_PASS', { module: m.id, test: t, dur_ms: dur });
+              await ee.emit('TEST_PASS', { module: m.id, test: t, dur_ms: dur, side_effects: evaluation.summary });
             } catch (e) {
+              if (e && (e.code === 'E_SIDEEFFECTS_DECLARATION' || e.code === 'E_SIDEEFFECTS_FORBIDDEN')) {
+                throw e;
+              }
               const dur = Date.now() - testStart;
               const errMsg = e instanceof Error ? e.message : String(e);
               failureCode = 'E_TEST';
@@ -1845,6 +2419,46 @@ program
           }
         }
 
+        if (opts.withOracles) {
+          const patternsOption = opts.oracleSpec || opts.oracle_spec;
+          const patternList = Array.isArray(patternsOption)
+            ? patternsOption
+            : (patternsOption ? [patternsOption] : []);
+          const filterModules = new Set((compose.modules || []).map(entry => entry.id));
+          try {
+            const oracleResult = await runOracles({
+              modulesRoot,
+              specPatterns: patternList.length ? patternList : ['oracles/specs/**/*.json'],
+              manifestsById: manifests,
+              filterModules,
+              ee,
+              skipIfEmpty: true
+            });
+            if (oracleResult.totalCases > 0) {
+              summary.oracles = {
+                status: 'passed',
+                cases: oracleResult.totalCases,
+                attempts: oracleResult.totalAttempts,
+                specs: oracleResult.matchedSpecs || []
+              };
+              ee.info(`✓ Oracles passed (${oracleResult.totalCases} cases)`);
+            } else {
+              summary.oracles = { status: 'skipped', cases: 0, specs: [] };
+              ee.info('No oracle specs matched selected modules; skipping oracles.');
+            }
+            } catch (err) {
+              const code = err?.code || 'E_ORACLE';
+              failureCode = code;
+              summary.oracles = {
+                status: 'failed',
+                code,
+                message: err instanceof Error ? err.message : String(err),
+                specs: []
+              };
+              throw err instanceof Error ? err : new Error(String(err));
+            }
+          }
+
         if (opts.npmPack) {
           const winnerDir = await locateWinnerDir(composePath);
           if (!winnerDir) {
@@ -1881,6 +2495,7 @@ program
 
         successMessage = `✓ Shipping tests passed (${passed}/${total}).`;
       }
+      await publishSideEffectsSummary();
       summary.duration_ms = Date.now() - gateStart;
 
       if (opts.hookCmd) {
@@ -1902,6 +2517,7 @@ program
       await ee.emit('GATES_PASS', { passed: summary.results.passed, failed: summary.results.failed, dur_ms: summary.duration_ms });
       if (successMessage) ee.info(successMessage);
     } catch (err) {
+      await publishSideEffectsSummary();
       summary.duration_ms = Date.now() - gateStart;
       const message = err instanceof Error ? err.message : String(err);
       summary.error = message;
