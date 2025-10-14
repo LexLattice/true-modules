@@ -135,3 +135,34 @@ Records of tournament outcomes and review insights once a pull request wraps. Ea
   - Capture at least one failing/headless gate scenario in fixtures to keep the error-path logic tested.
   - Explore packaging a helper that syncs `.codex-cloud` artifacts to cloud storage for longer-term retention.
   - Consider wiring a smoke test that runs `bo4-apply.sh` in mock mode to verify manifest parsing and branch creation do not regress.
+
+## E4–E5 — Oracles + Side-Effects Enforcement
+- **Winner**: `task_e_68ed97f4a89c8320b26b3c08b8163c09` · var4 (pending merge)
+- **Why it won**:
+  - Introduced a full oracle toolchain: Ajv-backed spec validation (`spec/oracle.schema.json`), a default `tm oracles run` workflow that auto-discovers specs, and reusable helpers for executing cases under guard instrumentation.
+  - Wired the shipping gates `--with-oracles` flag so oracle cases publish `ORACLE_*` events, feed per-module side-effect telemetry, and enrich the gate summary with observed vs declared operations plus outside-root write detection.
+  - Added a Node-based guard (`scripts/side-effects-guard.mjs`) and library helpers to capture filesystem writes and process launches, producing actionable `E_SIDEEFFECTS_DECLARATION` / `E_SIDEEFFECTS_FORBIDDEN` errors with sample paths/commands.
+  - Documented the end-to-end flow in `docs/oracles.md`, covering schema expectations, CLI defaults, and the new telemetry.
+- **Imports pulled in**:
+  - Borrowed var2’s JSON-schema approach (now codified as `spec/oracle.schema.json`) to catch malformed specs before execution.
+  - Adopted var3’s focus on summarising side effects per module, extending it with richer sampling and event emission.
+- **Why other variants fell short**:
+  - `var1` lacked schema validation and only captured stdout/stderr, making file-based determinism checks impossible.
+  - `var2` didn’t verify writes stayed within module roots and failed to observe child processes spawned inside module scripts.
+  - `var3` required callers to pass `--spec` manually and still allowed external writes to pass so long as `FS:write` was declared.
+- **Review feedback addressed**:
+  - Hardened the run commands to allow multi-token `CODEX_BIN` without reintroducing command-injection risks.
+  - Exposed richer gate telemetry (`summary.side_effects`, `SIDEEFFECTS_SUMMARY`) and ensured oracle specs can be skipped gracefully when no files match.
+- **Tradeoffs**:
+  - The guard only instruments Node APIs; native helpers or other runtimes still need bespoke hooks.
+  - Sampled telemetry intentionally caps the number of paths/commands to keep summaries digestible, potentially hiding long-tail operations.
+- **Open questions**:
+  - Should we extend the guard to flag read-only access patterns (e.g., unexpected `FS:read` outside module roots)?
+  - Do we want oracle-specific summaries similar to the shipping-gate aggregate, especially when running the CLI standalone?
+- **Residual risks**:
+  - Teams must still update module manifests manually; missing declarations are only caught once tests run under guard.
+  - Complex specs that depend on non-Node tooling may evade detection until additional instrumentation is added.
+- **Follow-ups / TODOs**:
+  - Add negative fixtures exercising `E_ORACLE_NONDETERMINISM`/`E_SIDEEFFECTS_FORBIDDEN` in CI to keep coverage strong.
+  - Explore extending the guard to observe non-Node subprocesses (e.g., Git hooks invoking shell scripts).
+  - Consider caching validated oracle specs to avoid repeatedly compiling large Ajv schemas in long-running sessions.
