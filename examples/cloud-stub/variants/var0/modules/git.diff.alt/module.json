@@ -1,0 +1,36 @@
+{
+  "id": "git.diff.alt",
+  "version": "0.1.0",
+  "summary": "Alternative diff provider for duplicate-provider fixtures",
+  "provides": [
+    "DiffPort@1"
+  ],
+  "requires": [
+    "SafetyPort@1"
+  ],
+  "inputs": {},
+  "outputs": {},
+  "side_effects": [
+    "Process:git",
+    "FS:read"
+  ],
+  "invariants": [
+    "deterministic(outputs | inputs)",
+    "conserves: no write outside worktree"
+  ],
+  "tests": [
+    "tests/spec_diff_tracked.json",
+    "tests/spec_diff_untracked.json"
+  ],
+  "port_exports": {
+    "DiffPort@1": { "file": "src/index.ts", "export": "diffPort" }
+  },
+  "evidence": [
+    {
+      "kind": "file",
+      "file": "src/lib.rs",
+      "lines": "1-40",
+      "note": "example placeholder"
+    }
+  ]
+}

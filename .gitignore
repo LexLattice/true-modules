@@ -10,7 +10,11 @@ examples/winner/package.json
 examples/winner/ports.map.json
 examples/winner/tsconfig.json
 **/.tm/
+!runs/**/.tm/
 variants/
+!runs/**/variants/
+!examples/cloud-stub/variants/
+!examples/cloud-stub/variants/**
 
 # Rust
 target
@@ -23,6 +27,8 @@ target
 .env
 
 artifacts/
+!runs/**/artifacts/
 tmp/
 cloud-prompt-*.md
 .codex/
+runs/ci-headless/

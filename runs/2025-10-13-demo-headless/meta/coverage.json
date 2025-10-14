@@ -1,0 +1,72 @@
+{
+  "goals": [
+    "P1",
+    "P2",
+    "P3",
+    "P4"
+  ],
+  "variants": [
+    "var1",
+    "var2",
+    "var3",
+    "var4"
+  ],
+  "provides": [
+    {
+      "module": "git.diff.core@var4",
+      "covers": [
+        "P3"
+      ],
+      "provides_ports": [
+        "DiffPort@1"
+      ],
+      "requires": [
+        "SafetyPort@1"
+      ],
+      "risk": 0.2,
+      "evidence_strength": 0.8
+    },
+    {
+      "module": "git.index.controller@var1",
+      "covers": [
+        "P2"
+      ],
+      "provides_ports": [
+        "IndexPort@1"
+      ],
+      "requires": [],
+      "risk": 0.3,
+      "evidence_strength": 0.6
+    },
+    {
+      "module": "worktree.manager@var1",
+      "covers": [
+        "P1"
+      ],
+      "provides_ports": [
+        "WorktreePort@1"
+      ],
+      "requires": [],
+      "risk": 0.2,
+      "evidence_strength": 0.7
+    },
+    {
+      "module": "safety.validation@var2",
+      "covers": [
+        "P4"
+      ],
+      "provides_ports": [
+        "SafetyPort@1"
+      ],
+      "requires": [],
+      "risk": 0.1,
+      "evidence_strength": 0.5
+    }
+  ],
+  "weights": {
+    "P1": 3,
+    "P2": 2,
+    "P3": 2,
+    "P4": 1
+  }
+}

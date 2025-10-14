@@ -1,0 +1,35 @@
+{
+  "context": {
+    "run_id": "meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4",
+    "composer": "tm (scaffold)",
+    "generated_at": "2025-10-13T21:54:42.071Z"
+  },
+  "bill_of_materials": [
+    {
+      "id": "worktree.manager",
+      "version": "0.1.0"
+    },
+    {
+      "id": "safety.validation",
+      "version": "0.1.0"
+    },
+    {
+      "id": "git.diff.core",
+      "version": "0.1.0"
+    },
+    {
+      "id": "git.index.controller",
+      "version": "0.1.0"
+    }
+  ],
+  "wiring": [],
+  "glue": [],
+  "constraints": [
+    "no-cross-imports",
+    "ports-only-coupling"
+  ],
+  "notes": [
+    "This is a scaffold winner report generated without building/linking.",
+    "Use the full Composer to assemble code and run gates in shipping mode."
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "tasks": {
+    "demo-headless": {
+      "status": "ready",
+      "variants": [
+        {
+          "variant_index": 0,
+          "status": "ready",
+          "export": "var0"
+        }
+      ]
+    }
+  }
+}
