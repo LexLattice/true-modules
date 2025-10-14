@@ -73,5 +73,10 @@ Deterministic provider selection and compose diagnostics are covered in
 **[docs/events.md](docs/events.md)**.
 New contributors can follow the **[Contributor Playbook](docs/contributor-playbook.md)** (paired with the **[MCP façade](docs/mcp.md)**) for a plan → implement → validate → PR checklist that works for both humans and agents.
 
+## Integrations
+
+- **Model Context Protocol façade:** see [`docs/mcp.md`](docs/mcp.md) for tool descriptions and the automated smoke test that runs `mcp/tests/smoke.mjs` in CI (`.github/workflows/mcp-smoke.yml`).
+- **Python shim:** [`python/README.md`](python/README.md) documents a JSON-in/JSON-out wrapper (`python/tm_cli.py`) so Python agents can call `tm` without re-implementing the CLI.
+
 ## License
 Dual-licensed under **MIT** and **Apache-2.0**. See `LICENSE-MIT` and `LICENSE-APACHE`.

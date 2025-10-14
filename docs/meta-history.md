@@ -192,3 +192,28 @@ Records of tournament outcomes and review insights once a pull request wraps. Ea
 - **Residual risks**:
   - Hash-based copy detection assumes stable file content; generated artefacts with nondeterministic timestamps will still thrash the cache.
   - Platform skip directives rely on runner discipline—missing JSON markers now fail the gate, but richer diagnostics may help authors debug quickly.
+
+## F1–F2 — MCP Integration Tests · Python Shim
+- **Winner**: `task_e_68edca68ef4c83209992ed0dc004f30d` · var2
+- **Why it won**:
+  - Added `mcp/tests/smoke.mjs`, which boots the façade, exercises `tm.meta`, `tm.compose`, and `tm.gates`, captures events, and leaves deterministic JSON fixtures under `artifacts/mcp/`.
+  - Introduced a `mcp-smoke` GitHub Action that caches dependencies, runs the smoke script, and uploads the captured responses for reviewers.
+  - Published `python/tm_cli.py` plus docs so non-Node agents can stream JSON requests to `tm.mjs` and receive structured responses with preserved error codes and gate events.
+- **Imports pulled in**:
+  - Reused the `.tm` artifact structure to keep smoke outputs consistent (e.g., `artifacts/mcp/meta.json`, `compose.json`, `gates.json`).
+- **Why other variants fell short**:
+  - `var1` required callers to manage temp files manually and lacked stdin-driven JSON, breaking the acceptance criteria for the Python shim.
+  - `var3` dropped tm exit metadata when both gates and event parsing failed, hiding the original CLI error.
+  - `var4` suppressed tm stdout/stderr entirely, making debugging harder and forcing clients to rely on silent failures.
+- **Review feedback addressed**:
+  - Updated the smoke test to use `os.tmpdir()` and wait for façade output instead of a fixed delay, preventing leaks and race conditions.
+  - Tightened the shim so intermediate files are compact JSON while the `--pretty` flag only affects final output.
+- **Tradeoffs**:
+  - Running shipping gates as part of the smoke adds a few seconds to CI latency.
+  - The shim still shells out to Node; environments without `node` must configure `TM_NODE_BIN` explicitly.
+- **Open questions**:
+  - Should we add JSON-RPC transport coverage once the official MCP SDK is bundled?
+  - Do we want to expose a “debug” toggle so the stub can emit verbose logs when needed?
+- **Residual risks**:
+  - MCP smoke relies on stdout/stderr heuristics; façade changes that alter startup logging could require test tweaks.
+  - Python wrapper error envelopes now mirror tm codes, but downstream tooling must still handle non-zero exit statuses correctly.
