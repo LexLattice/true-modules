@@ -1,27 +1,23 @@
 {
-  "name": "windows-paths",
+  "name": "windows normalization",
   "normalize": [
-    {
-      "input": "C:/Users/Alice//Projects\\app",
-      "expect": "C:\\Users\\Alice\\Projects\\app"
-    },
-    {
-      "input": "/mnt/c/Users/Alice/Workspace",
-      "expect": "C:\\Users\\Alice\\Workspace"
-    },
-    {
-      "input": "C:\\Users\\Alice\\..\\Bob\\Repo",
-      "expect": "C:\\Users\\Bob\\Repo"
-    }
+    { "input": "C:/Temp/../Logs", "expect": "C:\\Logs" },
+    { "input": "c:/Mixed/Case/../Path", "expect": "C:\\Mixed\\Path" },
+    { "input": "C\\Folder\\..\\", "expect": "C:\\" },
+    { "input": "//Server/Share//dir", "expect": "\\\\Server\\Share\\dir" },
+    { "input": "\\\\?\\UNC\\FileSrv\\Share\\data", "expect": "\\\\FileSrv\\Share\\data" },
+    { "input": "/mnt/c/Users/demo", "expect": "C:\\Users\\demo" },
+    { "input": "  \\wsl$\\Ubuntu\\home\\user  ", "expect": "\\\\wsl$\\Ubuntu\\home\\user" }
   ],
   "safe": [
-    { "path": "C:\\Users\\Alice\\Projects\\app", "expected": true },
-    { "path": "/mnt/c/Users/Alice/Workspace", "expected": true }
+    "C:\\Users\\Public",
+    "C:/Temp/file.txt",
+    { "path": "\\\\?\\C:\\Windows", "expected": true }
   ],
   "unsafe": [
-    "C:\\Windows\\System32\\..\\..\\Windows",
-    "\\\\server\\share\\payload.txt",
-    "C:\\Temp\\CON",
-    "relative\\path\\file.txt"
+    "C:\\Temp\\..\\..\\Windows\\System32",
+    "\\\\Server\\Share\\file.txt",
+    "C:\\path\\NUL.txt",
+    "   "
   ]
 }

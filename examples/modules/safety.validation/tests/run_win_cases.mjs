@@ -1,14 +1,15 @@
 #!/usr/bin/env node
-import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
+const TEST_SKIP_EXIT_CODE = 64;
+
 if (process.platform !== 'win32') {
-  console.log(`SKIP SafetyPort Windows cases (platform=${process.platform})`);
-  process.exit(0);
+  console.log(`TEST_SKIPPED SafetyPort Windows cases (platform=${process.platform})`);
+  process.exit(TEST_SKIP_EXIT_CODE);
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -62,15 +63,19 @@ for (const entry of spec.normalize || []) {
 
 for (const entry of spec.safe || []) {
   if (!entry) continue;
-  const actual = await safetyPort.isSafe(entry.path);
-  const expected = Boolean(entry.expected);
+  const value = typeof entry === 'string' ? entry : entry.path;
+  const expected = typeof entry === 'object' && entry !== null && Object.prototype.hasOwnProperty.call(entry, 'expected')
+    ? Boolean(entry.expected)
+    : true;
+  const actual = await safetyPort.isSafe(value);
   assertions += 1;
   if (actual !== expected) {
-    failures.push(`isSafe(${JSON.stringify(entry.path)}) → ${actual} (expected ${expected})`);
+    failures.push(`isSafe(${JSON.stringify(value)}) → ${actual} (expected ${expected})`);
   }
 }
 
 for (const entry of spec.unsafe || []) {
+  if (!entry) continue;
   const actual = await safetyPort.isSafe(entry);
   assertions += 1;
   if (actual !== false) {

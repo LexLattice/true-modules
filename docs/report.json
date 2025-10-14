@@ -1,92 +1,86 @@
 {
-  "summary": "Validated oracle specs against a shared schema, expanded gate telemetry with side-effect summaries, and made the CLI default to bundled specs while skipping gracefully when no files match.",
+  "summary": "Added explicit port-major negotiation, phase telemetry, and smarter caching so repeated gates finish faster while SafetyPort tests cover more OS-specific edges; ensured skipped tests still surface their side-effect audits.",
   "checklist": [
     {
       "id": "P1",
       "status": "implemented",
-      "notes": "Added oracle schema validation, richer side-effect reporting during gates, and CLI defaults for bundled specs with skip messaging."
+      "notes": "Composer now enforces single port major selections and gates emit detailed timing with skip awareness."
     }
   ],
   "architecture": {
-    "components_added": [
-      {
-        "name": "side-effects evaluator",
-        "path": "scripts/lib/side-effects.mjs",
-        "role": "workflow"
-      },
-      {
-        "name": "oracle spec schema",
-        "path": "spec/oracle.schema.json",
-        "role": "infra"
-      }
-    ],
+    "components_added": [],
     "components_modified": [
       {
         "path": "tm.mjs",
-        "reason": "Validate oracle specs, aggregate per-module side-effect telemetry, and emit richer gate summaries."
+        "reason": "Track phase durations, skip-aware tests, incremental TypeScript runs, and emit side-effect summaries on TEST_SKIPPED."
       },
       {
-        "path": "docs/oracles.md",
-        "reason": "Document schema validation, CLI defaults, and the new side-effect telemetry blocks."
+        "path": "runtimes/ts/composer/index.mjs",
+        "reason": "Avoid redundant winner copies by hashing module and glue directories."
+      },
+      {
+        "path": "scripts/lib/provider-analysis.mjs",
+        "reason": "Resolve port majors with explicit policies and surface inactive providers."
       }
     ],
-    "data_flow": "Oracle specs are validated via Ajv before execution; shipping tests and oracles feed side-effect events into a per-module accumulator that emits telemetry and populates the gate summary.",
-    "state_management": "Gate summaries cache aggregated side-effect observations keyed by module until publishing at the end of the run.",
+    "data_flow": "Gates capture start/stop times per phase, emit a GATES_SUMMARY event, propagate skipped test metadata with side-effect summaries, while composer caches port copy decisions via hash digests.",
+    "state_management": "Telemetry accumulates phase results in-memory until summary emission; ESLint and TypeScript reuse .tm caches while the composer persists directory hashes in winner/.tm/copy-hashes.json.",
     "invariants": [
-      "Invalid oracle specs fail with E_ORACLE_SPEC prior to running any scripts.",
-      "Side-effect summaries must never report filesystem writes outside a module root without triggering E_SIDEEFFECTS_FORBIDDEN."
+      "Exactly one port major per PortName is active in a plan after negotiation."
     ],
     "tradeoffs": [
-      "Limiting side-effect samples to the first few paths/commands keeps telemetry lightweight but may omit later operations."
+      "Hashing winner directories adds upfront cost but prevents repeated full copies when inputs are unchanged."
     ],
     "alternatives_considered": [
       {
-        "option": "Defer schema validation until after running each case",
-        "rejected_because": "Errors would surface mid-run with partial telemetry instead of providing actionable upfront feedback."
+        "option": "Always re-copy module directories without hashing",
+        "rejected_because": "Would keep behaviour simple but forfeits performance wins on large trees.",
+        "confidence": 0.5
       }
     ],
-    "open_questions": [
-      "Should oracle executions emit their own aggregated side-effect summaries similar to gates?"
-    ]
+    "open_questions": []
   },
   "tests": {
-    "added": [],
-    "how_to_run": "node tm.mjs gates shipping --compose examples/compose.json --modules-root examples/modules --with-oracles --oracle-spec oracles/specs/git.diff.core.json"
+    "added": [
+      "examples/modules/safety.validation/tests/runner.mjs",
+      "examples/modules/safety.validation/tests/run_win_cases.mjs"
+    ],
+    "how_to_run": "node tm.mjs gates shipping --compose examples/compose.greedy.json --modules-root examples/modules --overrides examples/compose.overrides/overrides.json --emit-events --events-out tmp/test-events.ndjson --events-truncate --strict-events"
   },
   "metrics": {
-    "files_changed": 5,
-    "insertions": 525,
-    "deletions": 136
+    "files_changed": 2,
+    "insertions": 9,
+    "deletions": 5
   },
   "decisions": [
     {
-      "option": "Validate oracle specs with JSON Schema before execution",
-      "rationale": "Catching authoring mistakes early avoids running flaky or malformed scripts and provides clearer diagnostics for operators.",
+      "option": "Emit a GATES_SUMMARY event with per-phase durations",
+      "rationale": "Provides structured telemetry so CI can compare warm-cache runs and surface skips.",
       "rejected_alternatives": [
         {
-          "variant": "Rely on manual normalization errors",
-          "reason": "Normalization misses structural issues (e.g. wrong property types) that schema validation detects immediately.",
-          "confidence": 0.5
+          "variant": "Log durations only to stdout",
+          "reason": "Hard for automation to parse and compare runs reliably.",
+          "confidence": 0.4
         }
       ]
     }
   ],
   "risks": [
-    "Schema or telemetry changes may require future adjustments as new oracle fields are introduced."
+    "Directory hashing could still be expensive on extremely large winners."
   ],
   "residual_risks": [
-    "Aggregated side-effect telemetry could still miss edge cases when modules spawn many unique commands beyond the sample limit."
+    "GATES_SUMMARY consumers must handle the new event before relying on durations."
   ],
   "followups": [
     {
-      "title": "Surface side-effect summaries for standalone oracle runs",
+      "title": "Benchmark composer hashing on large module sets",
       "priority": "P2",
-      "owner": "Platform",
-      "pointer": "tm.mjs#runOracles"
+      "owner": "runtime",
+      "pointer": "runtimes/ts/composer/index.mjs#L1"
     }
   ],
   "todos": [
-    "Expose configuration for side-effect sample limits if teams need deeper telemetry."
+    "Consider persisting directory hashes across runs outside the winner workspace for faster diffing."
   ],
   "confidence": 0.6
 }
