@@ -1,1 +1,21 @@
-{"name":"paths"}
+{
+  "name": "posix normalization",
+  "normalize": [
+    { "input": " /tmp//../var/log/ ", "expect": "/var/log" },
+    { "input": "././config//../etc/passwd", "expect": "etc/passwd" },
+    { "input": "/etc/../", "expect": "/" },
+    { "input": "../../../../", "expect": "" },
+    { "input": "  ", "expect": "" }
+  ],
+  "safe": [
+    "/var/data/project",
+    { "path": "/opt/service/bin", "expected": true },
+    { "path": "  /usr/local/share  ", "expected": true }
+  ],
+  "unsafe": [
+    "../etc/passwd",
+    "./relative/path",
+    "/tmp/../../etc/shadow",
+    "   "
+  ]
+}

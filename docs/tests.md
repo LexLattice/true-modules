@@ -70,4 +70,4 @@ Some modules provide additional packs that only execute on specific platforms. F
 node examples/modules/safety.validation/tests/run_win_cases.mjs
 ```
 
-When invoked on Linux or macOS, the script prints `SKIP SafetyPort Windows cases (platform: ...)` and exits with status `0` so CI remains green. On Windows machines it transpiles `src/index.ts` on the fly and asserts the path normalization and safety guards declared in `tests/spec_paths_windows.json`.
+When invoked on Linux or macOS, the script prints `TEST_SKIPPED SafetyPort Windows cases (platform=...)` and exits with status `64`. The shipping gates interpret exit code `64` as a platform skip and emit a `TEST_SKIPPED` event instead of counting the case as a pass or failure. On Windows machines it transpiles `src/index.ts` on the fly and asserts the path normalization and safety guards declared in `tests/spec_paths_windows.json`.

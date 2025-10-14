@@ -2,13 +2,24 @@
 import path from 'path';
 import process from 'process';
 import { fileURLToPath } from 'url';
+import fs from 'fs/promises';
+const CACHE_ROOT = path.join(process.cwd(), '.tm');
+
+async function ensureCacheLocation() {
+  await fs.mkdir(CACHE_ROOT, { recursive: true });
+  return path.join(CACHE_ROOT, 'eslint.cache');
+}
+
 export async function collectCrossImportDiagnostics(targets) {
   const { ESLint } = await import('eslint');
   const pluginModule = await import('./eslint-cross-import-rule.cjs');
   const crossImportPlugin = pluginModule.default || pluginModule;
+  const cacheLocation = await ensureCacheLocation();
   const eslint = new ESLint({
     cwd: process.cwd(),
     errorOnUnmatchedPattern: false,
+    cache: true,
+    cacheLocation,
     plugins: {
       'cross-import': crossImportPlugin
     }
@@ -44,9 +55,12 @@ async function main() {
     const { ESLint } = await import('eslint');
     const pluginModule = await import('./eslint-cross-import-rule.cjs');
     const crossImportPlugin = pluginModule.default || pluginModule;
+    const cacheLocation = await ensureCacheLocation();
     const eslint = new ESLint({
       cwd: process.cwd(),
       errorOnUnmatchedPattern: false,
+      cache: true,
+      cacheLocation,
       plugins: {
         'cross-import': crossImportPlugin
       }

@@ -67,6 +67,7 @@ export function analyzeProviders(compose, moduleEntriesInput) {
   const moduleEntries = normalizeModuleEntries(moduleEntriesInput);
   const infoMap = new Map();
   const modulePortIndex = new Map();
+  const basePortMajors = new Map();
 
   for (const [moduleId, entry] of moduleEntries.entries()) {
     const manifest = toManifest(entry);
@@ -86,6 +87,8 @@ export function analyzeProviders(compose, moduleEntriesInput) {
       infoMap.get(major).providers.add(moduleId);
       if (!portMap.has(name)) portMap.set(name, []);
       portMap.get(name).push(major);
+      if (!basePortMajors.has(name)) basePortMajors.set(name, new Set());
+      basePortMajors.get(name).add(major);
     }
     modulePortIndex.set(moduleId, portMap);
   }
@@ -172,6 +175,48 @@ export function analyzeProviders(compose, moduleEntriesInput) {
     const target = unresolved.sort((a, b) => a.port.localeCompare(b.port))[0];
     const msg = `Duplicate providers for ${target.port}: ${target.providers.join(', ')}.\nAdd wiring from orchestrator or constraint prefer:${target.port}=${target.providers[0]}.`;
     throw tmError('E_DUP_PROVIDER', msg);
+  }
+
+  const versionAmbiguities = [];
+  for (const [basePort, majorsSet] of basePortMajors.entries()) {
+    if (!majorsSet || majorsSet.size <= 1) continue;
+    const majors = Array.from(majorsSet).sort();
+    const infos = majors.map(id => infoMap.get(id)).filter(Boolean);
+    const selected = infos.filter(info => info.reason === 'wired' || info.reason === 'preferred');
+    if (selected.length === 0) {
+      versionAmbiguities.push({
+        base: basePort,
+        majors,
+        message: `Multiple majors for ${basePort}: ${majors.join(', ')}. Add orchestrator wiring or preferred_providers entry targeting the desired major.`
+      });
+      continue;
+    }
+    if (selected.length > 1) {
+      const detail = selected.map(info => `${info.port}=${info.chosen}`).join(', ');
+      versionAmbiguities.push({
+        base: basePort,
+        majors,
+        message: `Conflicting majors for ${basePort}: ${detail}. Ensure a single major is selected via wiring or preferred_providers.`
+      });
+      continue;
+    }
+    const active = selected[0];
+    for (const info of infos) {
+      if (info === active) continue;
+      const leftovers = info.providers.filter(p => p !== active.chosen);
+      info.reason = 'inactive';
+      info.chosen = null;
+      if (leftovers.length) {
+        warnings.push(`Major ${info.port} skipped because ${active.chosen} was selected for ${basePort}; remaining providers: ${info.providers.join(', ')}.`);
+      } else {
+        warnings.push(`Major ${info.port} skipped because ${active.chosen} was selected for ${basePort}.`);
+      }
+    }
+  }
+
+  if (versionAmbiguities.length) {
+    const first = versionAmbiguities.sort((a, b) => a.base.localeCompare(b.base))[0];
+    throw tmError('E_PORT_VERSION_AMBIG', first.message);
   }
 
   for (const info of infoMap.values()) {

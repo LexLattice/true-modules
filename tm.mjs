@@ -281,6 +281,7 @@ function describeOverrideSummary(summary) {
 
 async function runCmd(cmd, args, opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 60_000;
+  const allowed = new Set((opts.allowedExitCodes || []).map(code => Number(code)));
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, {
       cwd: opts.cwd,
@@ -306,8 +307,9 @@ async function runCmd(cmd, args, opts = {}) {
     });
     child.on('exit', code => {
       clearTimeout(timer);
-      if (code === 0) resolve({ out, err, code });
-      else {
+      if (code === 0 || allowed.has(code)) {
+        resolve({ out, err, code });
+      } else {
         const message = (err || out || '').trim();
         const error = new Error(message || `Exit ${code}`);
         error.code = 'EXIT_' + code;
@@ -322,6 +324,7 @@ async function runCmd(cmd, args, opts = {}) {
 
 const SIDE_EFFECTS_GUARD = path.join(__dirname, 'scripts', 'side-effects-guard.mjs');
 const SIDE_EFFECTS_DIR = path.join(process.cwd(), '.tm', 'side-effects');
+const TEST_SKIP_EXIT_CODE = 64;
 
 function sanitizeSegment(value, fallback) {
   const text = String(value ?? '').replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+/, '').replace(/_+$/, '');
@@ -338,7 +341,7 @@ async function prepareSideEffectsLog(moduleId, caseName) {
   return logPath;
 }
 
-async function runNodeWithSideEffectsGuard({ scriptPath, args = [], cwd, timeoutMs, env = {}, moduleId, caseName }) {
+async function runNodeWithSideEffectsGuard({ scriptPath, args = [], cwd, timeoutMs, env = {}, moduleId, caseName, allowedExitCodes = [] }) {
   if (!moduleId) {
     throw tmError('E_SIDEEFFECTS_INTERNAL', 'Side-effects guard requires module id');
   }
@@ -350,7 +353,7 @@ async function runNodeWithSideEffectsGuard({ scriptPath, args = [], cwd, timeout
     TM_SIDEEFFECTS_CASE: caseName || path.basename(scriptPath),
     ...env
   };
-  const result = await runCmd(process.execPath, finalArgs, { cwd, timeoutMs, env: spawnEnv });
+  const result = await runCmd(process.execPath, finalArgs, { cwd, timeoutMs, env: spawnEnv, allowedExitCodes });
   return { ...result, logPath };
 }
 
@@ -2039,6 +2042,46 @@ oraclesCmd
     }
   });
 
+function formatDuration(ms) {
+  if (!Number.isFinite(ms)) return String(ms);
+  if (ms >= 10_000) return `${Math.round(ms / 1000)}s`;
+  if (ms >= 1_000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.round(ms)}ms`;
+}
+
+function extractSkipReason(output) {
+  if (!output) return { matched: false, reason: null };
+  const lines = String(output)
+    .split(/\r?\n/)
+    .map(entry => entry.trim())
+    .filter(entry => entry.length);
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed && typeof parsed === 'object') {
+        const event = String(parsed.tm_event || parsed.event || '').toUpperCase();
+        if (event === 'TEST_SKIPPED' || event === 'SKIP') {
+          const reasonValue = typeof parsed.reason === 'string' ? parsed.reason.trim() : '';
+          return { matched: true, reason: reasonValue || null };
+        }
+      }
+    } catch {
+      // fall through to regex checks
+    }
+    const testSkipped = /^TEST_SKIPPED\s*(.*)$/i.exec(line);
+    if (testSkipped) {
+      const reasonValue = testSkipped[1]?.trim() || '';
+      return { matched: true, reason: reasonValue || null };
+    }
+    const skip = /^SKIP\s*(.*)$/i.exec(line);
+    if (skip) {
+      const reasonValue = skip[1]?.trim() || '';
+      return { matched: true, reason: reasonValue || null };
+    }
+  }
+  return { matched: false, reason: null };
+}
+
 program
   .command('gates')
   .argument('<mode>', 'conceptual|shipping')
@@ -2113,7 +2156,7 @@ program
       run_id: runId,
       mode,
       modules: moduleIds,
-      results: { passed: 0, failed: 0 }
+      results: { passed: 0, failed: 0, skipped: 0 }
     };
     const sideEffectsAccumulator = createSideEffectsAccumulator();
     let sideEffectsPublished = false;
@@ -2134,6 +2177,18 @@ program
     let successMessage = '';
     let failureCode = null;
     let failureDetail = null;
+    const phases = [];
+    const runPhase = async (name, fn) => {
+      const start = Date.now();
+      try {
+        const result = await fn();
+        phases.push({ name, dur_ms: Date.now() - start, status: 'pass' });
+        return result;
+      } catch (err) {
+        phases.push({ name, dur_ms: Date.now() - start, status: 'fail' });
+        throw err;
+      }
+    };
 
     try {
       if (overrideSummary?.changed) {
@@ -2147,80 +2202,87 @@ program
       }
 
       await ee.emit('GATES_START', { compose_path: composePath, modules_total: moduleIds.length });
-      // Shared checks
-      for (const m of compose.modules || []) {
-        const mroot = path.join(modulesRoot, m.id);
-        const fp = path.join(mroot, 'module.json');
-        const manifest = await validateFile('module.schema.json', fp);
-        manifests[m.id] = { manifest, root: mroot };
-        if (!Array.isArray(manifest.evidence) || manifest.evidence.length === 0) {
-          throw tmError('E_REQUIRE_UNSAT', `Gate failure: ${m.id} has no evidence bindings.`);
+      await runPhase('manifest_validation', async () => {
+        for (const m of compose.modules || []) {
+          const mroot = path.join(modulesRoot, m.id);
+          const fp = path.join(mroot, 'module.json');
+          const manifest = await validateFile('module.schema.json', fp);
+          manifests[m.id] = { manifest, root: mroot };
+          if (!Array.isArray(manifest.evidence) || manifest.evidence.length === 0) {
+            throw tmError('E_REQUIRE_UNSAT', `Gate failure: ${m.id} has no evidence bindings.`);
+          }
+          if (!Array.isArray(manifest.tests) || manifest.tests.length === 0) {
+            throw tmError('E_REQUIRE_UNSAT', `Gate failure: ${m.id} defines no tests.`);
+          }
+          if (!Array.isArray(manifest.invariants) || manifest.invariants.length === 0) {
+            throw tmError('E_REQUIRE_UNSAT', `Gate failure: ${m.id} defines no invariants.`);
+          }
         }
-        if (!Array.isArray(manifest.tests) || manifest.tests.length === 0) {
-          throw tmError('E_REQUIRE_UNSAT', `Gate failure: ${m.id} defines no tests.`);
-        }
-        if (!Array.isArray(manifest.invariants) || manifest.invariants.length === 0) {
-          throw tmError('E_REQUIRE_UNSAT', `Gate failure: ${m.id} defines no invariants.`);
-        }
-      }
+      });
 
-      // Cross-import lint (ESLint preferred, regex fallback)
-      let ranEslint = false;
-      const lintStart = Date.now();
-      await ee.emit('LINT_START', { lint_tool: 'eslint' });
-      try {
-        const { errorCount, diagnostics } = await collectCrossImportDiagnostics([modulesRoot]);
-        ranEslint = true;
-        if (errorCount > 0) {
-          const formatted = diagnostics.slice(0, 20).map(d => {
-            const rel = path.relative(process.cwd(), d.file);
-            return `${rel}:${d.line}:${d.column} ${d.message}`;
-          }).join('\n');
-          const first = diagnostics[0];
-          failureCode = 'E_LINT';
-          await ee.emit('LINT_FAIL', {
-            lint_tool: 'eslint',
-            code: 'E_LINT',
-            message: first?.message,
-            file: first ? path.relative(process.cwd(), first.file) : undefined,
-            line: first?.line,
-            dur_ms: Date.now() - lintStart
-          });
-          throw tmError('E_LINT', 'ESLint cross-module check failed:\n' + formatted);
-        }
-        await ee.emit('LINT_PASS', { lint_tool: 'eslint', dur_ms: Date.now() - lintStart });
-      } catch (err) {
-        if (!ranEslint && err && (err.code === 'ERR_MODULE_NOT_FOUND' || (typeof err.message === 'string' && err.message.includes("Cannot find module 'eslint'")))) {
-          await ee.emit('GATES_WARN', { code: 'WARN_ESLINT_UNAVAILABLE', message: 'eslint not available; falling back to regex lint' });
-          const fallbackStart = Date.now();
-          await ee.emit('LINT_START', { lint_tool: 'fallback-regex' });
-          const lint = await crossImportLint(modulesRoot);
-          if (lint.length) {
-            const formatted = lint.slice(0, 20).map(entry => {
-              const rel = path.relative(process.cwd(), entry.file);
-              return `${rel}:${entry.line} ${entry.msg}`;
+      await runPhase('lint', async () => {
+        let ranEslint = false;
+        const lintStart = Date.now();
+        await ee.emit('LINT_START', { lint_tool: 'eslint' });
+        try {
+          const { errorCount, diagnostics } = await collectCrossImportDiagnostics([modulesRoot]);
+          ranEslint = true;
+          if (errorCount > 0) {
+            const formatted = diagnostics.slice(0, 20).map(d => {
+              const rel = path.relative(process.cwd(), d.file);
+              return `${rel}:${d.line}:${d.column} ${d.message}`;
             }).join('\n');
+            const first = diagnostics[0];
             failureCode = 'E_LINT';
             await ee.emit('LINT_FAIL', {
-              lint_tool: 'fallback-regex',
+              lint_tool: 'eslint',
               code: 'E_LINT',
-              message: lint[0].msg,
-              file: path.relative(process.cwd(), lint[0].file),
-              line: lint[0].line,
-              dur_ms: Date.now() - fallbackStart
+              message: first?.message,
+              file: first ? path.relative(process.cwd(), first.file) : undefined,
+              line: first?.line,
+              dur_ms: Date.now() - lintStart
             });
-            throw tmError('E_LINT', 'Cross-module import violations:\n' + formatted);
+            throw tmError('E_LINT', 'ESLint cross-module check failed:\n' + formatted);
           }
-          await ee.emit('LINT_PASS', { lint_tool: 'fallback-regex', dur_ms: Date.now() - fallbackStart });
-        } else if (!ranEslint) {
-          throw err instanceof Error ? err : new Error(String(err));
-        } else {
-          throw err instanceof Error ? err : new Error(String(err));
+          await ee.emit('LINT_PASS', { lint_tool: 'eslint', dur_ms: Date.now() - lintStart });
+        } catch (err) {
+          if (!ranEslint && err && (err.code === 'ERR_MODULE_NOT_FOUND' || (typeof err.message === 'string' && err.message.includes("Cannot find module 'eslint'")))) {
+            await ee.emit('GATES_WARN', { code: 'WARN_ESLINT_UNAVAILABLE', message: 'eslint not available; falling back to regex lint' });
+            const fallbackStart = Date.now();
+            await ee.emit('LINT_START', { lint_tool: 'fallback-regex' });
+            const lint = await crossImportLint(modulesRoot);
+            if (lint.length) {
+              const formatted = lint.slice(0, 20).map(entry => {
+                const rel = path.relative(process.cwd(), entry.file);
+                return `${rel}:${entry.line} ${entry.msg}`;
+              }).join('\n');
+              failureCode = 'E_LINT';
+              await ee.emit('LINT_FAIL', {
+                lint_tool: 'fallback-regex',
+                code: 'E_LINT',
+                message: lint[0].msg,
+                file: path.relative(process.cwd(), lint[0].file),
+                line: lint[0].line,
+                dur_ms: Date.now() - fallbackStart
+              });
+              throw tmError('E_LINT', 'Cross-module import violations:\n' + formatted);
+            }
+            await ee.emit('LINT_PASS', { lint_tool: 'fallback-regex', dur_ms: Date.now() - fallbackStart });
+          } else {
+            throw err instanceof Error ? err : new Error(String(err));
+          }
         }
-      }
+      });
 
       if (mode === 'conceptual') {
-        successMessage = '✓ Conceptual gates passed.';
+        phases.push({ name: 'tests', dur_ms: 0, status: 'skipped' });
+        phases.push({ name: 'typecheck', dur_ms: 0, status: 'skipped' });
+        phases.push({ name: 'oracles', dur_ms: 0, status: 'skipped' });
+        phases.push({ name: 'npm_pack', dur_ms: 0, status: 'skipped' });
+        const lintPhase = phases.find(entry => entry.name === 'lint');
+        const parts = [];
+        if (lintPhase) parts.push(`lint ${formatDuration(lintPhase.dur_ms)}`);
+        successMessage = parts.length ? `✓ Conceptual gates passed (${parts.join(', ')})` : '✓ Conceptual gates passed.';
       } else {
         const timeoutMs = Number(opts.timeoutMs ?? 60_000);
         if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
@@ -2242,81 +2304,108 @@ program
 
         let total = 0;
         let passed = 0;
-        for (const m of compose.modules || []) {
-          const { manifest, root } = manifests[m.id];
-          for (const t of manifest.tests || []) {
-            if (typeof t !== 'string') {
-              throw tmError('E_REQUIRE_UNSAT', `Test entry for ${m.id} is not a string: ${JSON.stringify(t)}`);
-            }
-            total += 1;
-            const testStart = Date.now();
-            await ee.emit('TEST_START', { module: m.id, test: t });
-            try {
-              let scriptAbs;
-              let args = [];
-              if (t.startsWith('script:')) {
-                const scriptRel = t.replace(/^script:/, '').trim();
-                if (!scriptRel) throw tmError('E_REQUIRE_UNSAT', 'Script entry missing path');
-                scriptAbs = path.join(root, scriptRel);
-                args = [];
-              } else if (t.endsWith('.json')) {
-                const runner = path.join(root, 'tests', 'runner.mjs');
-                await fs.access(runner);
-                const specPath = path.join(root, t);
-                scriptAbs = runner;
-                args = ['--spec', specPath, '--moduleRoot', root];
-              } else {
-                throw tmError('E_REQUIRE_UNSAT', `Unknown test entry: ${t}`);
+        let skippedTests = 0;
+        await runPhase('tests', async () => {
+          for (const m of compose.modules || []) {
+            const { manifest, root } = manifests[m.id];
+            for (const t of manifest.tests || []) {
+              if (typeof t !== 'string') {
+                throw tmError('E_REQUIRE_UNSAT', `Test entry for ${m.id} is not a string: ${JSON.stringify(t)}`);
               }
+              total += 1;
+              const testStart = Date.now();
+              await ee.emit('TEST_START', { module: m.id, test: t });
+              try {
+                let scriptAbs;
+                let args = [];
+                if (t.startsWith('script:')) {
+                  const scriptRel = t.replace(/^script:/, '').trim();
+                  if (!scriptRel) throw tmError('E_REQUIRE_UNSAT', 'Script entry missing path');
+                  scriptAbs = path.join(root, scriptRel);
+                } else if (t.endsWith('.json')) {
+                  const runner = path.join(root, 'tests', 'runner.mjs');
+                  await fs.access(runner);
+                  const specPath = path.join(root, t);
+                  scriptAbs = runner;
+                  args = ['--spec', specPath, '--moduleRoot', root];
+                } else {
+                  throw tmError('E_REQUIRE_UNSAT', `Unknown test entry: ${t}`);
+                }
 
-              const { logPath } = await runNodeWithSideEffectsGuard({
-                scriptPath: scriptAbs,
-                args,
-                cwd: root,
-                timeoutMs,
-                moduleId: m.id,
-                caseName: t
-              });
-
-              const events = await readSideEffectEvents(logPath);
-              const evaluation = evaluateSideEffects({ events, moduleId: m.id, manifest, moduleRoot: root });
-              recordSideEffectsObservation(sideEffectsAccumulator, m.id, evaluation.summary);
-              if (evaluation.violation) {
-                const sideErr = evaluation.violation;
-                const dur = Date.now() - testStart;
-                const message = sideErr instanceof Error ? sideErr.message : String(sideErr);
-                failureCode = sideErr?.code || 'E_SIDEEFFECTS';
-                failureDetail = { module: m.id, test: t, ...(sideErr?.detail || {}), side_effects: evaluation.summary };
-                await ee.emit('TEST_FAIL', {
-                  module: m.id,
-                  test: t,
-                  dur_ms: dur,
-                  error: message,
-                  code: failureCode,
-                  side_effects: evaluation.summary
+                const runResult = await runNodeWithSideEffectsGuard({
+                  scriptPath: scriptAbs,
+                  args,
+                  cwd: root,
+                  timeoutMs,
+                  moduleId: m.id,
+                  caseName: t,
+                  allowedExitCodes: [TEST_SKIP_EXIT_CODE]
                 });
-                summary.results = { passed, failed: total - passed };
-                throw sideErr;
-              }
 
-              const dur = Date.now() - testStart;
-              passed += 1;
-              await ee.emit('TEST_PASS', { module: m.id, test: t, dur_ms: dur, side_effects: evaluation.summary });
-            } catch (e) {
-              if (e && (e.code === 'E_SIDEEFFECTS_DECLARATION' || e.code === 'E_SIDEEFFECTS_FORBIDDEN')) {
-                throw e;
+                const events = await readSideEffectEvents(runResult.logPath);
+                const evaluation = evaluateSideEffects({ events, moduleId: m.id, manifest, moduleRoot: root });
+                recordSideEffectsObservation(sideEffectsAccumulator, m.id, evaluation.summary);
+
+                if (runResult.code === TEST_SKIP_EXIT_CODE) {
+                  const skipInfo = extractSkipReason(runResult.out || runResult.err);
+                  if (!skipInfo.matched) {
+                    const skipErr = tmError(
+                      'E_TEST',
+                      `Test ${t} exited with skip code ${TEST_SKIP_EXIT_CODE} but did not emit TEST_SKIPPED directive.`
+                    );
+                    skipErr.detail = { module: m.id, test: t, exit_code: runResult.code };
+                    throw skipErr;
+                  }
+                  skippedTests += 1;
+                  const dur = Date.now() - testStart;
+                  await ee.emit('TEST_SKIPPED', {
+                    module: m.id,
+                    test: t,
+                    dur_ms: dur,
+                    reason: skipInfo.reason || undefined,
+                    side_effects: evaluation.summary
+                  });
+                  continue;
+                }
+                if (evaluation.violation) {
+                  const sideErr = evaluation.violation;
+                  const dur = Date.now() - testStart;
+                  const message = sideErr instanceof Error ? sideErr.message : String(sideErr);
+                  failureCode = sideErr?.code || 'E_SIDEEFFECTS';
+                  failureDetail = { module: m.id, test: t, ...(sideErr?.detail || {}), side_effects: evaluation.summary };
+                  await ee.emit('TEST_FAIL', {
+                    module: m.id,
+                    test: t,
+                    dur_ms: dur,
+                    error: message,
+                    code: failureCode,
+                    side_effects: evaluation.summary
+                  });
+                  summary.results = { passed, failed: total - passed, skipped: skippedTests };
+                  throw sideErr;
+                }
+
+                const dur = Date.now() - testStart;
+                passed += 1;
+                await ee.emit('TEST_PASS', { module: m.id, test: t, dur_ms: dur, side_effects: evaluation.summary });
+              } catch (e) {
+                if (e && (e.code === 'E_SIDEEFFECTS_DECLARATION' || e.code === 'E_SIDEEFFECTS_FORBIDDEN')) {
+                  throw e;
+                }
+                const dur = Date.now() - testStart;
+                const errMsg = e instanceof Error ? e.message : String(e);
+                failureCode = 'E_TEST';
+                await ee.emit('TEST_FAIL', { module: m.id, test: t, dur_ms: dur, error: errMsg, code: 'E_TEST' });
+                summary.results = { passed, failed: total - passed, skipped: skippedTests };
+                throw tmError('E_TEST', `Test failed for ${m.id} (${t}): ${errMsg}`);
               }
-              const dur = Date.now() - testStart;
-              const errMsg = e instanceof Error ? e.message : String(e);
-              failureCode = 'E_TEST';
-              await ee.emit('TEST_FAIL', { module: m.id, test: t, dur_ms: dur, error: errMsg, code: 'E_TEST' });
-              summary.results = { passed, failed: total - passed };
-              throw tmError('E_TEST', `Test failed for ${m.id} (${t}): ${errMsg}`);
             }
           }
-        }
+        });
 
-        summary.results = { passed, failed: 0 };
+        summary.results = { passed, failed: 0, skipped: skippedTests };
+        summary.tests = { total, passed, skipped: skippedTests };
+
         const workspaceRoot = path.resolve(modulesRoot, '..');
         const portsDir = await resolvePortsDir(workspaceRoot);
         const portHarness = await buildPortHarness(manifests, workspaceRoot, portsDir, ee);
@@ -2339,113 +2428,120 @@ program
 
         const mustTypeCheck = tsFiles.length > 0 || (portHarness.entries && portHarness.entries.length > 0);
 
-        if (mustTypeCheck) {
-          const tmDir = path.join(workspaceRoot, '.tm');
-          await fs.mkdir(tmDir, { recursive: true });
-          const tscLogPath = path.join(tmDir, 'tsc.log');
-          const tsProjectPath = path.join(tmDir, 'tsconfig.json');
-          const includePaths = includeDirs.map(dir => {
-            const rel = path.relative(tmDir, dir) || '.';
-            return rel.replace(/\\/g, '/');
-          });
-          const tsConfig = {
-            compilerOptions: {
-              module: "NodeNext",
-              moduleResolution: "NodeNext",
-              target: "ES2022",
-              strict: true,
-              skipLibCheck: true,
-              allowImportingTsExtensions: true
-            },
-            include: includePaths
-          };
-          await fs.writeFile(tsProjectPath, JSON.stringify(tsConfig, null, 2));
+        if (!mustTypeCheck) {
+          phases.push({ name: 'typecheck', dur_ms: 0, status: 'skipped' });
+        } else {
+          await runPhase('typecheck', async () => {
+            const tmDir = path.join(workspaceRoot, '.tm');
+            await fs.mkdir(tmDir, { recursive: true });
+            const tscLogPath = path.join(tmDir, 'tsc.log');
+            const tsProjectPath = path.join(tmDir, 'tsconfig.json');
+            const includePaths = includeDirs.map(dir => {
+              const rel = path.relative(tmDir, dir) || '.';
+              return rel.replace(/\\/g, '/');
+            });
+            const tsConfig = {
+              compilerOptions: {
+                module: 'NodeNext',
+                moduleResolution: 'NodeNext',
+                target: 'ES2022',
+                strict: true,
+                skipLibCheck: true,
+                allowImportingTsExtensions: true,
+                incremental: true,
+                tsBuildInfoFile: 'tsconfig.tsbuildinfo'
+              },
+              include: includePaths
+            };
+            await fs.writeFile(tsProjectPath, JSON.stringify(tsConfig, null, 2));
 
-          const requireForTs = createRequire(import.meta.url);
-          let tscBin;
-          try {
-            const tsPackagePath = requireForTs.resolve('typescript/package.json');
-            const tsPackage = requireForTs(tsPackagePath);
-            const binRelative = tsPackage && tsPackage.bin && tsPackage.bin.tsc ? tsPackage.bin.tsc : 'bin/tsc';
-            tscBin = path.join(path.dirname(tsPackagePath), binRelative);
-          } catch {
-            tscBin = null;
-          }
-          if (!tscBin) {
-            throw tmError('E_TSC', 'TypeScript compiler not found. Install with `npm i -D typescript`.');
-          }
-          try {
-            await fs.access(tscBin);
-          } catch {
-            throw tmError('E_TSC', 'TypeScript compiler not found. Install with `npm i -D typescript`.');
-          }
+            const requireForTs = createRequire(import.meta.url);
+            let tscBin;
+            try {
+              const tsPackagePath = requireForTs.resolve('typescript/package.json');
+              const tsPackage = requireForTs(tsPackagePath);
+              const binRelative = tsPackage && tsPackage.bin && tsPackage.bin.tsc ? tsPackage.bin.tsc : 'bin/tsc';
+              tscBin = path.join(path.dirname(tsPackagePath), binRelative);
+            } catch {
+              tscBin = null;
+            }
+            if (!tscBin) {
+              throw tmError('E_TSC', 'TypeScript compiler not found. Install with `npm i -D typescript`.');
+            }
+            try {
+              await fs.access(tscBin);
+            } catch {
+              throw tmError('E_TSC', 'TypeScript compiler not found. Install with `npm i -D typescript`.');
+            }
 
-          await ee.emit('TSC_START', { artifact: path.relative(process.cwd(), tscLogPath) });
-          const start = Date.now();
-          const child = spawn(process.execPath, [tscBin, '--noEmit', '--project', tsProjectPath], {
-            cwd: workspaceRoot,
-            shell: false
-          });
-          let stdout = '';
-          let stderr = '';
-          child.stdout.on('data', d => { stdout += d; });
-          child.stderr.on('data', d => { stderr += d; });
-          const exitCode = await new Promise((resolve, reject) => {
-            child.on('error', reject);
-            child.on('exit', code => resolve(code));
-          });
-          const duration = Date.now() - start;
-          const combined = `${stdout}${stderr}`;
-          await fs.writeFile(tscLogPath, combined);
-          if (exitCode !== 0) {
-            const lines = combined.split(/\r?\n/).filter(Boolean).slice(0, 10);
-            failureCode = 'E_TSC';
-            await ee.emit('TSC_FAIL', { dur_ms: duration, artifact: path.relative(process.cwd(), tscLogPath), code: 'E_TSC' });
-            if (portHarness.entries?.length) {
-              const firstLine = lines[0] || '';
-              const match = portHarness.entries.find(entry => firstLine.includes(path.basename(entry.harnessPath)) || combined.includes(entry.harnessPath));
-              if (match) {
-                await ee.emit('PORT_CHECK_FAIL', { module: match.module, port: match.port, error: 'port_conformance_failed', code: 'E_PORT_CONFORMANCE' });
+            await ee.emit('TSC_START', { artifact: path.relative(process.cwd(), tscLogPath) });
+            const start = Date.now();
+            const child = spawn(process.execPath, [tscBin, '--noEmit', '--incremental', '--project', tsProjectPath], {
+              cwd: workspaceRoot,
+              shell: false
+            });
+            let stdout = '';
+            let stderr = '';
+            child.stdout.on('data', d => { stdout += d; });
+            child.stderr.on('data', d => { stderr += d; });
+            const exitCode = await new Promise((resolve, reject) => {
+              child.on('error', reject);
+              child.on('exit', code => resolve(code));
+            });
+            const duration = Date.now() - start;
+            const combined = `${stdout}${stderr}`;
+            await fs.writeFile(tscLogPath, combined);
+            if (exitCode !== 0) {
+              const lines = combined.split(/\r?\n/).filter(Boolean).slice(0, 10);
+              failureCode = 'E_TSC';
+              await ee.emit('TSC_FAIL', { dur_ms: duration, artifact: path.relative(process.cwd(), tscLogPath), code: 'E_TSC' });
+              if (portHarness.entries?.length) {
+                const firstLine = lines[0] || '';
+                const match = portHarness.entries.find(entry => firstLine.includes(path.basename(entry.harnessPath)) || combined.includes(entry.harnessPath));
+                if (match) {
+                  await ee.emit('PORT_CHECK_FAIL', { module: match.module, port: match.port, error: 'port_conformance_failed', code: 'E_PORT_CONFORMANCE' });
+                }
+              }
+              throw tmError('E_TSC', `TypeScript check failed:\n${lines.join('\n')}\nSee full log at ${tscLogPath}`);
+            } else {
+              await ee.emit('TSC_PASS', { dur_ms: duration, artifact: path.relative(process.cwd(), tscLogPath) });
+              if (portHarness.entries?.length) {
+                for (const entry of portHarness.entries) {
+                  await ee.emit('PORT_CHECK_PASS', { module: entry.module, port: entry.port });
+                }
               }
             }
-            throw tmError('E_TSC', `TypeScript check failed:\n${lines.join('\n')}\nSee full log at ${tscLogPath}`);
-          } else {
-            await ee.emit('TSC_PASS', { dur_ms: duration, artifact: path.relative(process.cwd(), tscLogPath) });
-            if (portHarness.entries?.length) {
-              for (const entry of portHarness.entries) {
-                await ee.emit('PORT_CHECK_PASS', { module: entry.module, port: entry.port });
-              }
-            }
-          }
+          });
         }
 
         if (opts.withOracles) {
-          const patternsOption = opts.oracleSpec || opts.oracle_spec;
-          const patternList = Array.isArray(patternsOption)
-            ? patternsOption
-            : (patternsOption ? [patternsOption] : []);
-          const filterModules = new Set((compose.modules || []).map(entry => entry.id));
-          try {
-            const oracleResult = await runOracles({
-              modulesRoot,
-              specPatterns: patternList.length ? patternList : ['oracles/specs/**/*.json'],
-              manifestsById: manifests,
-              filterModules,
-              ee,
-              skipIfEmpty: true
-            });
-            if (oracleResult.totalCases > 0) {
-              summary.oracles = {
-                status: 'passed',
-                cases: oracleResult.totalCases,
-                attempts: oracleResult.totalAttempts,
-                specs: oracleResult.matchedSpecs || []
-              };
-              ee.info(`✓ Oracles passed (${oracleResult.totalCases} cases)`);
-            } else {
-              summary.oracles = { status: 'skipped', cases: 0, specs: [] };
-              ee.info('No oracle specs matched selected modules; skipping oracles.');
-            }
+          await runPhase('oracles', async () => {
+            const patternsOption = opts.oracleSpec || opts.oracle_spec;
+            const patternList = Array.isArray(patternsOption)
+              ? patternsOption
+              : (patternsOption ? [patternsOption] : []);
+            const filterModules = new Set((compose.modules || []).map(entry => entry.id));
+            try {
+              const oracleResult = await runOracles({
+                modulesRoot,
+                specPatterns: patternList.length ? patternList : ['oracles/specs/**/*.json'],
+                manifestsById: manifests,
+                filterModules,
+                ee,
+                skipIfEmpty: true
+              });
+              if (oracleResult.totalCases > 0) {
+                summary.oracles = {
+                  status: 'passed',
+                  cases: oracleResult.totalCases,
+                  attempts: oracleResult.totalAttempts,
+                  specs: oracleResult.matchedSpecs || []
+                };
+                ee.info(`✓ Oracles passed (${oracleResult.totalCases} cases)`);
+              } else {
+                summary.oracles = { status: 'skipped', cases: 0, specs: [] };
+                ee.info('No oracle specs matched selected modules; skipping oracles.');
+              }
             } catch (err) {
               const code = err?.code || 'E_ORACLE';
               failureCode = code;
@@ -2457,9 +2553,13 @@ program
               };
               throw err instanceof Error ? err : new Error(String(err));
             }
-          }
+          });
+        } else {
+          phases.push({ name: 'oracles', dur_ms: 0, status: 'skipped' });
+        }
 
         if (opts.npmPack) {
+          const packStart = Date.now();
           const winnerDir = await locateWinnerDir(composePath);
           if (!winnerDir) {
             await ee.emit('GATES_WARN', {
@@ -2467,18 +2567,21 @@ program
               message: 'npm pack requested but no winner workspace with package.json was found; skipping smoke test.'
             });
             summary.npm_pack = { status: 'skipped', reason: 'workspace_missing' };
+            phases.push({ name: 'npm_pack', dur_ms: Date.now() - packStart, status: 'skipped' });
           } else {
             try {
               const result = await runNpmPackSmoke(winnerDir, ee);
               const relWinner = path.relative(process.cwd(), winnerDir) || '.';
               if (result?.skipped) {
                 summary.npm_pack = { status: 'skipped', reason: result.reason };
+                phases.push({ name: 'npm_pack', dur_ms: Date.now() - packStart, status: 'skipped' });
               } else {
                 summary.npm_pack = {
                   status: 'passed',
                   workspace: relWinner,
                   tarball: result?.tarball || null
                 };
+                phases.push({ name: 'npm_pack', dur_ms: Date.now() - packStart, status: 'pass' });
               }
             } catch (err) {
               if (err && err.code === 'npm_pack_failed') {
@@ -2488,15 +2591,31 @@ program
                   diagnostics: Array.isArray(err.diagnostics) ? err.diagnostics.slice(0, 5) : []
                 };
               }
+              phases.push({ name: 'npm_pack', dur_ms: Date.now() - packStart, status: 'fail' });
               throw err;
             }
           }
+        } else {
+          phases.push({ name: 'npm_pack', dur_ms: 0, status: 'skipped' });
         }
 
-        successMessage = `✓ Shipping tests passed (${passed}/${total}).`;
+        const lintPhase = phases.find(entry => entry.name === 'lint');
+        const testsPhase = phases.find(entry => entry.name === 'tests');
+        const typePhase = phases.find(entry => entry.name === 'typecheck');
+        const parts = [];
+        if (testsPhase) {
+          const testSummary = skippedTests ? `${passed}/${total} (${skippedTests} skipped)` : `${passed}/${total}`;
+          parts.push(`tests ${testSummary} in ${formatDuration(testsPhase.dur_ms)}`);
+        }
+        if (lintPhase) parts.push(`lint ${formatDuration(lintPhase.dur_ms)}`);
+        if (typePhase && typePhase.status === 'pass') {
+          parts.push(`typecheck ${formatDuration(typePhase.dur_ms)}`);
+        }
+        successMessage = parts.length ? `✓ Shipping gates passed (${parts.join(', ')})` : '✓ Shipping gates passed.';
       }
       await publishSideEffectsSummary();
       summary.duration_ms = Date.now() - gateStart;
+      summary.phases = phases;
 
       if (opts.hookCmd) {
         await new Promise((resolve, reject) => {
@@ -2514,18 +2633,46 @@ program
         });
       }
 
-      await ee.emit('GATES_PASS', { passed: summary.results.passed, failed: summary.results.failed, dur_ms: summary.duration_ms });
+      await ee.emit('GATES_SUMMARY', {
+        phases,
+        dur_ms: summary.duration_ms,
+        passed: summary.results.passed,
+        failed: summary.results.failed,
+        skipped: summary.results.skipped
+      });
+      await ee.emit('GATES_PASS', {
+        passed: summary.results.passed,
+        failed: summary.results.failed,
+        skipped: summary.results.skipped,
+        dur_ms: summary.duration_ms
+      });
       if (successMessage) ee.info(successMessage);
     } catch (err) {
       await publishSideEffectsSummary();
       summary.duration_ms = Date.now() - gateStart;
+      summary.phases = phases;
       const message = err instanceof Error ? err.message : String(err);
       summary.error = message;
       const code = err && typeof err === 'object' && 'code' in err && err.code ? err.code : (failureCode || 'E_UNKNOWN');
       summary.code = code;
       if (failureDetail) summary.failure_detail = failureDetail;
       const failDetail = failureDetail ? { ...failureDetail } : {};
-      await ee.emit('GATES_FAIL', { code, message, passed: summary.results.passed, failed: summary.results.failed, dur_ms: summary.duration_ms, ...failDetail });
+      await ee.emit('GATES_SUMMARY', {
+        phases,
+        dur_ms: summary.duration_ms,
+        passed: summary.results.passed,
+        failed: summary.results.failed,
+        skipped: summary.results.skipped
+      });
+      await ee.emit('GATES_FAIL', {
+        code,
+        message,
+        passed: summary.results.passed,
+        failed: summary.results.failed,
+        skipped: summary.results.skipped,
+        dur_ms: summary.duration_ms,
+        ...failDetail
+      });
       throw err instanceof Error ? err : new Error(message);
     } finally {
       await ee.close();

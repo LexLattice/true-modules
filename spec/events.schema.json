@@ -68,10 +68,12 @@
         "COMPOSE_OVERRIDES_APPLIED",
         "GATES_PASS",
         "GATES_FAIL",
+        "GATES_SUMMARY",
         "GATES_WARN",
         "TEST_START",
         "TEST_PASS",
         "TEST_FAIL",
+        "TEST_SKIPPED",
         "LINT_START",
         "LINT_PASS",
         "LINT_FAIL",
@@ -146,6 +148,8 @@
         "attempts": { "type": "integer", "minimum": 1 },
         "passed": { "type": "integer", "minimum": 0 },
         "failed": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 },
+        "reason": { "type": "string" },
         "side_effects": { "$ref": "#/$defs/side_effect_summary" },
         "added": {
           "type": "object",
@@ -174,7 +178,20 @@
         },
         "removed_constraints": { "type": "array", "items": { "type": "string" } },
         "sections": { "type": "array", "items": { "type": "string" } },
-        "overrides_path": { "type": "string" }
+        "overrides_path": { "type": "string" },
+        "phases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "dur_ms"],
+            "properties": {
+              "name": { "type": "string" },
+              "dur_ms": { "type": "number", "minimum": 0 },
+              "status": { "type": "string", "enum": ["pass", "fail", "skipped"] }
+            }
+          }
+        }
       }
     }
   }

@@ -3,9 +3,14 @@
 The scaffold composer refuses plans that select multiple modules for the same
 port major unless the plan disambiguates the winner. Provider identity is
 normalized to `PortName@major`, so `DiffPort@1.2` and `DiffPort@1` are treated as
-`DiffPort@1` when evaluating conflicts.
+`DiffPort@1` when evaluating conflicts. When a plan includes multiple majors for
+the same port (for example `DiffPort@1` and `DiffPort@2`), the composer now
+expects a policy that selects a single major. Wiring the orchestrator to the
+desired provider or adding a `preferred_providers` entry with the specific
+`Port@major` satisfies the requirement. Without an explicit choice the CLI and
+TypeScript composer exit with `E_PORT_VERSION_AMBIG`.
 
-## Failure scenario
+## Failure scenarios
 
 If two modules both provide the same port major and the compose plan omits both
 explicit wiring and preferences, `tm compose` aborts with `E_DUP_PROVIDER`:
@@ -13,6 +18,13 @@ explicit wiring and preferences, `tm compose` aborts with `E_DUP_PROVIDER`:
 ```
 E_DUP_PROVIDER Duplicate providers for DiffPort@1: git.diff.alt, git.diff.core.
 Add wiring from orchestrator or constraint prefer:DiffPort@1=git.diff.alt.
+```
+
+When multiple majors exist and no rule narrows the plan to one of them, the
+composer exits with `E_PORT_VERSION_AMBIG`:
+
+```
+E_PORT_VERSION_AMBIG Multiple majors for DiffPort: DiffPort@1, DiffPort@2. Add orchestrator wiring or preferred_providers entry targeting the desired major.
 ```
 
 The same policy is enforced by the TypeScript MVP composer under
@@ -77,12 +89,20 @@ Run `tm compose --explain` to see the deterministic resolution for every port:
     "provider": "git.diff.core",
     "reason": "wired",
     "candidates": ["git.diff.alt", "git.diff.core"]
+  },
+  {
+    "port": "DiffPort@2",
+    "provider": null,
+    "reason": "inactive",
+    "candidates": ["git.diff.next"]
   }
 ]
 ```
 
-`reason` is `wired`, `preferred`, or `sole`, indicating whether the provider was
-chosen by wiring, by preference, or because it was the only option.
+`reason` is `wired`, `preferred`, `sole`, or `inactive`, indicating whether the
+provider was chosen by wiring, by preference, because it was the only option, or
+because another major won the negotiation. `inactive` entries remain in the
+explain output so you can see which majors were suppressed.
 
 ## Overrides
 
