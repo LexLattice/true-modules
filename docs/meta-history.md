@@ -110,7 +110,7 @@ Records of tournament outcomes and review insights once a pull request wraps. Ea
 - **Why it won**:
   - Delivered the full watcher → harvest → meta → compose → gates loop as standalone scripts (`codex-watch.mjs`, `bo4-harvest.mjs`, `bo4-meta-run.mjs`, `bo4-compose.mjs`, `bo4-apply.sh`) with a shared `run.json` manifest and hardened module validation (`E_VARIANT_NO_MODULES` exits).
   - Added an orchestrator (`bo4-loop.mjs`) plus CI coverage (`headless_cloud` job) that runs against a stubbed Codex Cloud (`CODEX_BIN=node scripts/tests/codex-cloud-stub.mjs`) and validates event telemetry.
-  - Documented the workflow (`docs/cloud-headless.md`) and clarified that exported variants live under `.codex-cloud/variants/<task_id>/varN/` to keep the repo clean while maintaining durable artifacts.
+  - Documented the workflow (`docs/headless-cloud.md`) and clarified that exported variants live under `.codex-cloud/variants/<task_id>/varN/` to keep the repo clean while maintaining durable artifacts.
   - Shored up the CLI after review: removed `shell: true` spawns, introduced `resolveCommand` so multi-word `CODEX_BIN` values work safely, and extracted a reusable manifest helper for the apply script.
 - **Imports pulled in**: Borrowed the recursive True Module checks and winner selection rationale from the stronger Wave 8 submissions while retaining var2’s manifest structure and CI job skeleton.
 - **Why other variants fell short**:
