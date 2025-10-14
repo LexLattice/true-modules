@@ -11,7 +11,8 @@ import {
   defaultEventSource,
   readLastSeq,
   nowIso,
-  relativize
+  relativize,
+  resolveCommand
 } from './lib/headless-utils.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -47,8 +48,9 @@ function sleep(ms) {
 }
 
 function runCmd(cmd, args, { cwd } = {}) {
+  const { command, args: baseArgs } = resolveCommand(cmd);
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
+    const child = spawn(command, [...baseArgs, ...args], { cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', chunk => { stdout += chunk; });

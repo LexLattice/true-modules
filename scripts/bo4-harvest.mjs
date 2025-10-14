@@ -7,7 +7,8 @@ import {
   ensureDir,
   updateManifest,
   relativize,
-  nowIso
+  nowIso,
+  resolveCommand
 } from './lib/headless-utils.mjs';
 import { tmError } from './lib/provider-analysis.mjs';
 
@@ -40,8 +41,9 @@ function parseArgs(argv) {
 }
 
 function runCmd(cmd, args, opts = {}) {
+  const { command, args: baseArgs } = resolveCommand(cmd);
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd: opts.cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
+    const child = spawn(command, [...baseArgs, ...args], { cwd: opts.cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', chunk => { stdout += chunk; });

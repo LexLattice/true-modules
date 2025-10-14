@@ -13,6 +13,8 @@ examples/winner/tsconfig.json
 !runs/**/.tm/
 variants/
 !runs/**/variants/
+!examples/cloud-stub/variants/
+!examples/cloud-stub/variants/**
 
 # Rust
 target

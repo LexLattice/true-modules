@@ -1,0 +1,3179 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 7cfad6b86aa5806969152e1cbcb87410e55b67be..4b6402251352023679a4a34b7f432a7ce2670873 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -135,49 +135,86 @@ jobs:
+ 
+       - name: Replay gate events
+         run: node tm.mjs events replay --in artifacts/events.ndjson --out artifacts/timeline.txt --strict
+ 
+       - name: Replay meta events
+         run: node tm.mjs events replay --in artifacts/meta.events.ndjson --out artifacts/meta.timeline.txt --strict
+ 
+ 
+       - name: Extract override summary
+         run: |
+           node -e "const fs=require('fs');const raw=fs.readFileSync('artifacts/compose.overrides.ndjson','utf8');const lines=raw.split(/\n+/).map(l=>l.trim()).filter(Boolean);if(lines.length===0){throw new Error('compose overrides event stream empty');}const events=lines.map(l=>JSON.parse(l));const evt=events.find(e=>e.event==='COMPOSE_OVERRIDES_APPLIED');if(!evt){throw new Error('COMPOSE_OVERRIDES_APPLIED not found');}fs.writeFileSync('artifacts/compose.overrides.summary.json', JSON.stringify(evt.detail ?? {}, null, 2));"
+ 
+       - name: Upload artifacts
+         uses: actions/upload-artifact@v4
+         with:
+           name: composer-events
+           path: |
+             artifacts/compose.overrides.ndjson
+             artifacts/compose.overrides.summary.json
+             artifacts/events.ndjson
+             artifacts/timeline.txt
+             artifacts/meta.events.ndjson
+             artifacts/meta.timeline.txt
+           if-no-files-found: warn
+ 
++  headless_cloud:
++    runs-on: ubuntu-latest
++    needs: schemas
++    steps:
++      - uses: actions/checkout@v4
++
++      - uses: actions/setup-node@v4
++        with:
++          node-version: '20'
++
++      - name: Cache Node dependencies
++        uses: actions/cache@v4
++        with:
++          path: |
++            ~/.npm
++            node_modules
++          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
++          restore-keys: |
++            ${{ runner.os }}-node-
++
++      - name: Install dependencies
++        run: npm ci
++
++      - name: Run headless Codex loop
++        env:
++          CODEX_BIN: node scripts/tests/codex-cloud-stub.mjs
++        run: |
++          set -euo pipefail
++          RUN_DIR=runs/ci-headless
++          rm -rf "$RUN_DIR"
++          node scripts/bo4-loop.mjs --task demo-headless --coverage examples/coverage.json --run-dir "$RUN_DIR"
++          cat "$RUN_DIR/run.json"
++
++      - name: Validate headless events
++        run: |
++          node tm.mjs events validate --in runs/ci-headless/artifacts/events.ndjson --strict
++
+   rust_check:
+     runs-on: ubuntu-latest
+     steps:
+       - uses: actions/checkout@v4
+ 
+       - uses: dtolnay/rust-toolchain@stable
+ 
+       - name: Cache Cargo
+         uses: actions/cache@v4
+         with:
+           path: |
+             ~/.cargo/bin
+             ~/.cargo/registry
+             ~/.cargo/git
+             runtimes/rust/ports/target
+             runtimes/rust/composer/target
+           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+           restore-keys: |
+             ${{ runner.os }}-cargo-
+ 
+       - name: Cargo check (ports/composer)
+         run: |
+           cd runtimes/rust/ports && cargo check
+           cd ../composer && cargo check
+diff --git a/.gitignore b/.gitignore
+index 3908d420bf20f920c8b1f08dfe9aa9065974a6d2..e6a85338a7670697cadc6b07af05982859fa63da 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,28 +1,32 @@
+ # Node
+ node_modules
+ npm-debug.log*
+ pnpm-lock.yaml
+ yarn.lock
+ dist
+ examples/winner/modules
+ examples/winner/glue
+ examples/winner/package.json
+ examples/winner/ports.map.json
+ examples/winner/tsconfig.json
+ **/.tm/
++!runs/**/.tm/
+ variants/
++!runs/**/variants/
+ 
+ # Rust
+ target
+ **/*.rs.bk
+ 
+ # Misc
+ .DS_Store
+ .idea
+ .vscode
+ .env
+ 
+ artifacts/
++!runs/**/artifacts/
+ tmp/
+ cloud-prompt-*.md
+ .codex/
++runs/ci-headless/
+diff --git a/docs/headless-cloud.md b/docs/headless-cloud.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..c930b4c361f468692fb5674a194cf8f55b13f0e4
+--- /dev/null
++++ b/docs/headless-cloud.md
+@@ -0,0 +1,81 @@
++# Headless Codex Cloud Loop
++
++The `bo4` toolchain runs the best-of-four pipeline without opening the Codex
++TUI.  Everything lands inside a timestamped run directory under `runs/`.  The
++loop is safe to run from CI, emits strict `tm-events@1`, and keeps a manifest
++(`run.json`) with stable pointers to artifacts.
++
++## 10-step checklist
++
++1. **Bootstrap a run directory** – pick a task id and create a slug: the helper
++   (`scripts/bo4-loop.mjs`) does this automatically.
++2. **Watch Codex Cloud** – `scripts/codex-watch.mjs` polls `codex cloud list` and
++   appends heartbeat events into `artifacts/events.ndjson` until the task is
++   `ready` or `error`.
++3. **Persist manifest state** – every stage updates `runs/<slug>/run.json` with
++   timestamps, chosen variant and artifact paths.
++4. **Harvest variants** – `scripts/bo4-harvest.mjs` pulls each ready variant via
++   `codex cloud export`, stores metadata (`variant.json`) and the diff patch, and
++   fails fast with `E_VARIANT_NO_MODULES` when `modules/` is missing.
++5. **Snapshot coverage** – copy `coverage.json` into `meta/coverage.json` so the
++   run directory stays self-contained.
++6. **Run meta scoring** – `scripts/bo4-meta-run.mjs` invokes `tm meta`, records
++   `meta/compose.json`, emits meta events, and computes `compose_sha256` for the
++   manifest (rewriting watch events so the context matches the final compose
++   hash and run id).
++7. **Compose winner scaffolding** – `tm compose` assembles `runs/<slug>/winner/`
++   using the harvested module tree for the selected variant.
++8. **Ship gates headlessly** – `tm gates shipping --emit-events` writes
++   `artifacts/events.gates.ndjson`; the compose helper merges these with the
++   earlier watch heartbeats into a resequenced `artifacts/events.ndjson`.
++9. **Inspect the manifest** – `run.json` tracks `task_id`, `compose_sha256`,
++   selected variant, gate status, and paths (relative to the repo root) for
++   every artifact.
++10. **Apply or branch** – `scripts/bo4-apply.sh` either triggers
++    `codex cloud apply ... --preflight` (single variant) or creates a
++    `bo4/<task>/winner` git branch with the `winner/` tree staged for review.
++
++## Run directory layout
++
++A successful headless run ends up with the following tree:
++
++```
++runs/2024-07-01-demo-headless/
++  run.json
++  artifacts/
++    events.ndjson
++    events.gates.ndjson
++    events.watch.ndjson
++  meta/
++    coverage.json
++    compose.json
++    meta.events.ndjson
++    report.json
++  variants/
++    var0/
++      diff.patch
++      modules/
++        ...
++      variant.json
++  winner/
++    README.md
++    report.json
++```
++
++Every path stored inside `run.json` is relative to the repository root so CI
++jobs can upload artifacts directly.
++
++## One-shot loop command
++
++Run the entire watcher→harvest→meta→compose→gates pipeline in one command.  For
++local development you can point `CODEX_BIN` at the stub shipped in this repo.
++
++```bash
++CODEX_BIN="node scripts/tests/codex-cloud-stub.mjs" \
++node scripts/bo4-loop.mjs \
++  --task demo-headless \
++  --coverage examples/coverage.json
++```
++
++The command prints grouped logs for each stage and finishes with the manifest
++location, ready for inspection or artifact upload.
+diff --git a/docs/report.json b/docs/report.json
+index 28825bc1266125e5d6cb6de694057bd3c23fdb62..e7a8f1a687c69d59ac10affcb8ac4771d2d5964b 100644
+--- a/docs/report.json
++++ b/docs/report.json
+@@ -1,85 +1,93 @@
+ {
+-  "summary": "CI now proves tm meta determinism by diffing consecutive runs, archives the META_PICK telemetry, and extends docs with drivers plus replay guidance so teams can audit selections later.",
++  "summary": "Hardened the headless BO4 loop by validating harvested modules, persisting meta selections, and forcing compose/gates to honor the recorded winner.",
+   "checklist": [
+     {
+       "id": "P1",
+       "status": "implemented",
+-      "notes": "Composer job runs tm meta twice with the conservative profile, diffs the outputs, validates/replays the emitted META_PICK stream, and documents the workflow for operators."
++      "notes": "Added recursive module.json detection during harvest, recorded meta winner rationale, and aligned compose/apply to the manifest selection."
+     }
+   ],
+   "architecture": {
+     "components_added": [],
+     "components_modified": [
+       {
+-        "path": ".github/workflows/ci.yml",
+-        "reason": "Added deterministic tm meta runs, meta event validation, replay, and artifact uploads."
++        "path": "scripts/bo4-harvest.mjs",
++        "reason": "Recursively inspects modules/ for module.json files and records harvested module ids for downstream selection."
+       },
+       {
+-        "path": "docs/meta-scorer.md",
+-        "reason": "Documented driver payload fields and showed the determinism diff procedure."
++        "path": "scripts/bo4-meta-run.mjs",
++        "reason": "Loads the harvest manifest to persist the winning variant and rationale after meta scoring."
+       },
+       {
+-        "path": "docs/events.md",
+-        "reason": "Clarified META_PICK validation expectations and pointed to meta timeline replay."
++        "path": "scripts/bo4-compose.mjs",
++        "reason": "Requires run.json.selection.variant and fails fast when the manifest lacks an explicit winner."
++      },
++      {
++        "path": "scripts/bo4-loop.mjs",
++        "reason": "Propagates CLI variant overrides into the meta stage for consistent selection."
++      },
++      {
++        "path": "scripts/bo4-apply.sh",
++        "reason": "Reads run.json.selection.variant instead of the old selected field before applying the winner."
+       }
+     ],
+-    "data_flow": "tm meta emits META_PICK NDJSON which CI now validates and publishes next to gate telemetry for replay consumers.",
+-    "state_management": "Determinism check persists two compose snapshots only long enough to diff them before artifact upload.",
++    "data_flow": "Harvest records module ids per variant, meta maps compose outputs back to those ids to select a winner, and compose/gates consume the chosen variant exclusively.",
++    "state_management": "run.json now owns a selection object with variant, rationale, and timestamps while harvest augments each variant entry with module id metadata.",
+     "invariants": [
+-      "Identical coverage and profile inputs must yield identical compose outputs.",
+-      "META_PICK telemetry conforms to tm-events@1 and passes strict validation."
++      "Harvest exits with E_VARIANT_NO_MODULES when modules/ is missing or lacks module.json files.",
++      "Compose and apply only proceed when run.json.selection.variant matches a harvested variant."
+     ],
+     "tradeoffs": [
+-      "Running tm meta twice adds minimal CI time but provides deterministic guarantees."
++      "Strict selection enforcement blocks compose until meta runs successfully but prevents silent drift to the wrong variant."
+     ],
+     "alternatives_considered": [
+       {
+-        "option": "Spot-check determinism manually",
+-        "rejected_because": "Would not prevent regressions introduced by future changes."
++        "option": "Fallback to the first harvested variant when no selection is recorded",
++        "rejected_because": "Would allow compose/gates to run against the wrong module set and hide meta failures."
+       }
+     ],
+     "open_questions": [
+-      "Should meta compose snapshots beyond the diff be retained for debugging?"
++      "Should we persist additional module metadata (e.g., hashes) to disambiguate variants with identical module id sets?"
+     ]
+   },
+   "tests": {
+     "added": [],
+-    "how_to_run": "node tm.mjs meta --coverage examples/coverage.json --profile conservative --out artifacts/meta.compose.first.json --emit-events --events-out artifacts/meta.events.ndjson --strict-events && node tm.mjs meta --coverage examples/coverage.json --profile conservative --out artifacts/meta.compose.second.json --strict-events && diff -u artifacts/meta.compose.first.json artifacts/meta.compose.second.json && node tm.mjs events validate --in artifacts/meta.events.ndjson --strict && node tm.mjs events replay --in artifacts/meta.events.ndjson --out artifacts/meta.timeline.txt --strict"
++    "how_to_run": "CODEX_BIN=\"node scripts/tests/codex-cloud-stub.mjs\" node scripts/bo4-loop.mjs --task demo --coverage examples/cloud-stub/tasks.json"
+   },
+   "metrics": {
+-    "files_changed": 4,
+-    "insertions": 99,
+-    "deletions": 49
++    "files_changed": 7,
++    "insertions": 206,
++    "deletions": 70
+   },
+   "decisions": [
+     {
+-      "option": "Enforce tm meta determinism in CI",
+-      "rationale": "Continuous diffing catches regressions early and surfaces the associated META_PICK telemetry for analysis.",
++      "option": "Infer the winning variant from compose output and persist it under run.json.selection",
++      "rationale": "Ensures downstream compose/gates operate on the same module set that meta approved.",
+       "rejected_alternatives": [
+         {
+-          "variant": "Single-run smoke check",
+-          "reason": "Cannot detect nondeterministic outputs without a second sample.",
+-          "confidence": 0.6
++          "variant": "Manual compose variant override",
++          "reason": "Relies on operator input and can desynchronize the manifest from meta results.",
++          "confidence": 0.5
+         }
+       ]
+     }
+   ],
+   "risks": [
+-    "Meta validation relies on example coverage inputs; broader matrices may reveal new edge cases."
++    "Variants with identical module ids may still require manual --variant overrides until additional tie-breakers exist."
+   ],
+   "residual_risks": [
+-    "If tm meta output changes legitimately, CI requires manual artifact review to refresh baselines."
++    "A failed meta run leaves run.json without selection timestamps, blocking compose until rerun."
+   ],
+   "followups": [
+     {
+-      "title": "Add broader coverage fixtures for meta determinism tests",
++      "title": "Add tie-breaker metadata to differentiate variants that share module ids",
+       "priority": "P2",
+       "owner": "Platform",
+-      "pointer": "docs/meta-scorer.md#determinism-check"
++      "pointer": "scripts/bo4-harvest.mjs#L1"
+     }
+   ],
+   "todos": [
+-    "Consider archiving diff outputs when determinism fails for easier debugging."
++    "Surface harvest module id counts in human-readable status output."
+   ],
+   "confidence": 0.6
+ }
+diff --git a/examples/cloud-stub/tasks.json b/examples/cloud-stub/tasks.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..6ef8b9f79e92fe373a49ab77077db6ec5e7b17e3
+--- /dev/null
++++ b/examples/cloud-stub/tasks.json
+@@ -0,0 +1,14 @@
++{
++  "tasks": {
++    "demo-headless": {
++      "status": "ready",
++      "variants": [
++        {
++          "variant_index": 0,
++          "status": "ready",
++          "export": "var0"
++        }
++      ]
++    }
++  }
++}
+diff --git a/runs/2025-10-13-demo-headless/artifacts/events.gates.ndjson b/runs/2025-10-13-demo-headless/artifacts/events.gates.ndjson
+new file mode 100644
+index 0000000000000000000000000000000000000000..3f03182243767dbc19210a9f839ad70871bcdd08
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/artifacts/events.gates.ndjson
+@@ -0,0 +1,26 @@
++{"schema":"tm-events@1","event":"GATES_START","ts":"2025-10-13T21:54:42.397Z","seq":1,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"compose_path":"/workspace/true-modules/runs/2025-10-13-demo-headless/meta/compose.json","modules_total":4}}
++{"schema":"tm-events@1","event":"LINT_START","ts":"2025-10-13T21:54:42.503Z","seq":2,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"lint_tool":"eslint"}}
++{"schema":"tm-events@1","event":"LINT_PASS","ts":"2025-10-13T21:54:43.278Z","seq":3,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"lint_tool":"eslint","dur_ms":775}}
++{"schema":"tm-events@1","event":"TEST_START","ts":"2025-10-13T21:54:43.279Z","seq":4,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"worktree.manager","test":"script:tests/pass.mjs"}}
++{"schema":"tm-events@1","event":"TEST_PASS","ts":"2025-10-13T21:54:43.386Z","seq":5,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"worktree.manager","test":"script:tests/pass.mjs","dur_ms":107}}
++{"schema":"tm-events@1","event":"TEST_START","ts":"2025-10-13T21:54:43.388Z","seq":6,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"safety.validation","test":"tests/spec_paths.json"}}
++{"schema":"tm-events@1","event":"TEST_PASS","ts":"2025-10-13T21:54:43.489Z","seq":7,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"safety.validation","test":"tests/spec_paths.json","dur_ms":101}}
++{"schema":"tm-events@1","event":"TEST_START","ts":"2025-10-13T21:54:43.490Z","seq":8,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"safety.validation","test":"script:tests/run_win_cases.mjs"}}
++{"schema":"tm-events@1","event":"TEST_PASS","ts":"2025-10-13T21:54:44.346Z","seq":9,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"safety.validation","test":"script:tests/run_win_cases.mjs","dur_ms":856}}
++{"schema":"tm-events@1","event":"TEST_START","ts":"2025-10-13T21:54:44.347Z","seq":10,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"git.diff.core","test":"tests/spec_diff_tracked.json"}}
++{"schema":"tm-events@1","event":"TEST_PASS","ts":"2025-10-13T21:54:44.454Z","seq":11,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"git.diff.core","test":"tests/spec_diff_tracked.json","dur_ms":107}}
++{"schema":"tm-events@1","event":"TEST_START","ts":"2025-10-13T21:54:44.455Z","seq":12,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"git.diff.core","test":"tests/spec_diff_untracked.json"}}
++{"schema":"tm-events@1","event":"TEST_PASS","ts":"2025-10-13T21:54:44.556Z","seq":13,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"git.diff.core","test":"tests/spec_diff_untracked.json","dur_ms":101}}
++{"schema":"tm-events@1","event":"TEST_START","ts":"2025-10-13T21:54:44.557Z","seq":14,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"git.index.controller","test":"tests/spec_index.json"}}
++{"schema":"tm-events@1","event":"TEST_PASS","ts":"2025-10-13T21:54:44.656Z","seq":15,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"git.index.controller","test":"tests/spec_index.json","dur_ms":99}}
++{"schema":"tm-events@1","event":"PORT_CHECK_START","ts":"2025-10-13T21:54:44.660Z","seq":16,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"worktree.manager","port":"WorktreePort@1"}}
++{"schema":"tm-events@1","event":"PORT_CHECK_START","ts":"2025-10-13T21:54:44.663Z","seq":17,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"safety.validation","port":"SafetyPort@1"}}
++{"schema":"tm-events@1","event":"PORT_CHECK_START","ts":"2025-10-13T21:54:44.664Z","seq":18,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"git.diff.core","port":"DiffPort@1"}}
++{"schema":"tm-events@1","event":"PORT_CHECK_START","ts":"2025-10-13T21:54:44.665Z","seq":19,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"git.index.controller","port":"IndexPort@1"}}
++{"schema":"tm-events@1","event":"TSC_START","ts":"2025-10-13T21:54:44.671Z","seq":20,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"artifact":"runs/2025-10-13-demo-headless/variants/var0/.tm/tsc.log"}}
++{"schema":"tm-events@1","event":"TSC_PASS","ts":"2025-10-13T21:54:45.672Z","seq":21,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"dur_ms":999,"artifact":"runs/2025-10-13-demo-headless/variants/var0/.tm/tsc.log"}}
++{"schema":"tm-events@1","event":"PORT_CHECK_PASS","ts":"2025-10-13T21:54:45.673Z","seq":22,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"worktree.manager","port":"WorktreePort@1"}}
++{"schema":"tm-events@1","event":"PORT_CHECK_PASS","ts":"2025-10-13T21:54:45.673Z","seq":23,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"safety.validation","port":"SafetyPort@1"}}
++{"schema":"tm-events@1","event":"PORT_CHECK_PASS","ts":"2025-10-13T21:54:45.673Z","seq":24,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"git.diff.core","port":"DiffPort@1"}}
++{"schema":"tm-events@1","event":"PORT_CHECK_PASS","ts":"2025-10-13T21:54:45.673Z","seq":25,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"git.index.controller","port":"IndexPort@1"}}
++{"schema":"tm-events@1","event":"GATES_PASS","ts":"2025-10-13T21:54:45.673Z","seq":26,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"passed":6,"failed":0,"dur_ms":3276}}
+diff --git a/runs/2025-10-13-demo-headless/artifacts/events.ndjson b/runs/2025-10-13-demo-headless/artifacts/events.ndjson
+new file mode 100644
+index 0000000000000000000000000000000000000000..cc2ef5d76f84bbd8c7231ffc39861a874f655131
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/artifacts/events.ndjson
+@@ -0,0 +1,29 @@
++{"schema":"tm-events@1","event":"GATES_START","ts":"2025-10-13T21:54:40.469Z","seq":1,"source":{"cli":"tm-headless","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc","mode":"shipping"},"detail":{"code":"WATCH_START","message":"Watching task demo-headless"}}
++{"schema":"tm-events@1","event":"GATES_WARN","ts":"2025-10-13T21:54:40.577Z","seq":2,"source":{"cli":"tm-headless","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc","mode":"shipping"},"detail":{"code":"WATCH_STATUS","message":"ready"}}
++{"schema":"tm-events@1","event":"GATES_PASS","ts":"2025-10-13T21:54:40.578Z","seq":3,"source":{"cli":"tm-headless","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc","mode":"shipping"},"detail":{"code":"WATCH_READY","message":"Task demo-headless ready"}}
++{"schema":"tm-events@1","event":"GATES_START","ts":"2025-10-13T21:54:42.397Z","seq":4,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"compose_path":"/workspace/true-modules/runs/2025-10-13-demo-headless/meta/compose.json","modules_total":4}}
++{"schema":"tm-events@1","event":"LINT_START","ts":"2025-10-13T21:54:42.503Z","seq":5,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"lint_tool":"eslint"}}
++{"schema":"tm-events@1","event":"LINT_PASS","ts":"2025-10-13T21:54:43.278Z","seq":6,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"lint_tool":"eslint","dur_ms":775}}
++{"schema":"tm-events@1","event":"TEST_START","ts":"2025-10-13T21:54:43.279Z","seq":7,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"worktree.manager","test":"script:tests/pass.mjs"}}
++{"schema":"tm-events@1","event":"TEST_PASS","ts":"2025-10-13T21:54:43.386Z","seq":8,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"worktree.manager","test":"script:tests/pass.mjs","dur_ms":107}}
++{"schema":"tm-events@1","event":"TEST_START","ts":"2025-10-13T21:54:43.388Z","seq":9,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"safety.validation","test":"tests/spec_paths.json"}}
++{"schema":"tm-events@1","event":"TEST_PASS","ts":"2025-10-13T21:54:43.489Z","seq":10,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"safety.validation","test":"tests/spec_paths.json","dur_ms":101}}
++{"schema":"tm-events@1","event":"TEST_START","ts":"2025-10-13T21:54:43.490Z","seq":11,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"safety.validation","test":"script:tests/run_win_cases.mjs"}}
++{"schema":"tm-events@1","event":"TEST_PASS","ts":"2025-10-13T21:54:44.346Z","seq":12,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"safety.validation","test":"script:tests/run_win_cases.mjs","dur_ms":856}}
++{"schema":"tm-events@1","event":"TEST_START","ts":"2025-10-13T21:54:44.347Z","seq":13,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"git.diff.core","test":"tests/spec_diff_tracked.json"}}
++{"schema":"tm-events@1","event":"TEST_PASS","ts":"2025-10-13T21:54:44.454Z","seq":14,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"git.diff.core","test":"tests/spec_diff_tracked.json","dur_ms":107}}
++{"schema":"tm-events@1","event":"TEST_START","ts":"2025-10-13T21:54:44.455Z","seq":15,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"git.diff.core","test":"tests/spec_diff_untracked.json"}}
++{"schema":"tm-events@1","event":"TEST_PASS","ts":"2025-10-13T21:54:44.556Z","seq":16,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"git.diff.core","test":"tests/spec_diff_untracked.json","dur_ms":101}}
++{"schema":"tm-events@1","event":"TEST_START","ts":"2025-10-13T21:54:44.557Z","seq":17,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"git.index.controller","test":"tests/spec_index.json"}}
++{"schema":"tm-events@1","event":"TEST_PASS","ts":"2025-10-13T21:54:44.656Z","seq":18,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"git.index.controller","test":"tests/spec_index.json","dur_ms":99}}
++{"schema":"tm-events@1","event":"PORT_CHECK_START","ts":"2025-10-13T21:54:44.660Z","seq":19,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"worktree.manager","port":"WorktreePort@1"}}
++{"schema":"tm-events@1","event":"PORT_CHECK_START","ts":"2025-10-13T21:54:44.663Z","seq":20,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"safety.validation","port":"SafetyPort@1"}}
++{"schema":"tm-events@1","event":"PORT_CHECK_START","ts":"2025-10-13T21:54:44.664Z","seq":21,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"git.diff.core","port":"DiffPort@1"}}
++{"schema":"tm-events@1","event":"PORT_CHECK_START","ts":"2025-10-13T21:54:44.665Z","seq":22,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"git.index.controller","port":"IndexPort@1"}}
++{"schema":"tm-events@1","event":"TSC_START","ts":"2025-10-13T21:54:44.671Z","seq":23,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"artifact":"runs/2025-10-13-demo-headless/variants/var0/.tm/tsc.log"}}
++{"schema":"tm-events@1","event":"TSC_PASS","ts":"2025-10-13T21:54:45.672Z","seq":24,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"dur_ms":999,"artifact":"runs/2025-10-13-demo-headless/variants/var0/.tm/tsc.log"}}
++{"schema":"tm-events@1","event":"PORT_CHECK_PASS","ts":"2025-10-13T21:54:45.673Z","seq":25,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"worktree.manager","port":"WorktreePort@1"}}
++{"schema":"tm-events@1","event":"PORT_CHECK_PASS","ts":"2025-10-13T21:54:45.673Z","seq":26,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"safety.validation","port":"SafetyPort@1"}}
++{"schema":"tm-events@1","event":"PORT_CHECK_PASS","ts":"2025-10-13T21:54:45.673Z","seq":27,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"git.diff.core","port":"DiffPort@1"}}
++{"schema":"tm-events@1","event":"PORT_CHECK_PASS","ts":"2025-10-13T21:54:45.673Z","seq":28,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"module":"git.index.controller","port":"IndexPort@1"}}
++{"schema":"tm-events@1","event":"GATES_PASS","ts":"2025-10-13T21:54:45.673Z","seq":29,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"shipping","compose_sha256":"b2ac946d75d504e6fdc81dd7bde307b0f486cbbcd2d99a53688ae2e001cf71bc"},"detail":{"passed":6,"failed":0,"dur_ms":3276}}
+diff --git a/runs/2025-10-13-demo-headless/artifacts/events.watch.ndjson b/runs/2025-10-13-demo-headless/artifacts/events.watch.ndjson
+new file mode 100644
+index 0000000000000000000000000000000000000000..71a7e45dc1d8f184e1b8815762096fdcb4324060
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/artifacts/events.watch.ndjson
+@@ -0,0 +1,3 @@
++{"schema":"tm-events@1","event":"GATES_START","ts":"2025-10-13T21:54:40.469Z","seq":1,"source":{"cli":"tm-headless","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","compose_sha256":"1cb93de5dbce39335b217bd1f561aa8dcae1e022a6273d3bf93dd09d9f65806c","mode":"shipping"},"detail":{"code":"WATCH_START","message":"Watching task demo-headless"}}
++{"schema":"tm-events@1","event":"GATES_WARN","ts":"2025-10-13T21:54:40.577Z","seq":2,"source":{"cli":"tm-headless","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","compose_sha256":"1cb93de5dbce39335b217bd1f561aa8dcae1e022a6273d3bf93dd09d9f65806c","mode":"shipping"},"detail":{"code":"WATCH_STATUS","message":"ready"}}
++{"schema":"tm-events@1","event":"GATES_PASS","ts":"2025-10-13T21:54:40.578Z","seq":3,"source":{"cli":"tm-headless","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","compose_sha256":"1cb93de5dbce39335b217bd1f561aa8dcae1e022a6273d3bf93dd09d9f65806c","mode":"shipping"},"detail":{"code":"WATCH_READY","message":"Task demo-headless ready"}}
+diff --git a/runs/2025-10-13-demo-headless/meta/compose.json b/runs/2025-10-13-demo-headless/meta/compose.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..9b8bd51ec10ee8dc8c30d293d564aa0855fafd9b
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/meta/compose.json
+@@ -0,0 +1,27 @@
++{
++  "run_id": "meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4",
++  "modules": [
++    {
++      "id": "worktree.manager",
++      "version": "0.1.0"
++    },
++    {
++      "id": "safety.validation",
++      "version": "0.1.0"
++    },
++    {
++      "id": "git.diff.core",
++      "version": "0.1.0"
++    },
++    {
++      "id": "git.index.controller",
++      "version": "0.1.0"
++    }
++  ],
++  "wiring": [],
++  "glue": [],
++  "constraints": [
++    "no-cross-imports",
++    "ports-only-coupling"
++  ]
++}
+\ No newline at end of file
+diff --git a/runs/2025-10-13-demo-headless/meta/coverage.json b/runs/2025-10-13-demo-headless/meta/coverage.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..399950e979ae7fd4c1e49a2f718d68014725e926
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/meta/coverage.json
+@@ -0,0 +1,72 @@
++{
++  "goals": [
++    "P1",
++    "P2",
++    "P3",
++    "P4"
++  ],
++  "variants": [
++    "var1",
++    "var2",
++    "var3",
++    "var4"
++  ],
++  "provides": [
++    {
++      "module": "git.diff.core@var4",
++      "covers": [
++        "P3"
++      ],
++      "provides_ports": [
++        "DiffPort@1"
++      ],
++      "requires": [
++        "SafetyPort@1"
++      ],
++      "risk": 0.2,
++      "evidence_strength": 0.8
++    },
++    {
++      "module": "git.index.controller@var1",
++      "covers": [
++        "P2"
++      ],
++      "provides_ports": [
++        "IndexPort@1"
++      ],
++      "requires": [],
++      "risk": 0.3,
++      "evidence_strength": 0.6
++    },
++    {
++      "module": "worktree.manager@var1",
++      "covers": [
++        "P1"
++      ],
++      "provides_ports": [
++        "WorktreePort@1"
++      ],
++      "requires": [],
++      "risk": 0.2,
++      "evidence_strength": 0.7
++    },
++    {
++      "module": "safety.validation@var2",
++      "covers": [
++        "P4"
++      ],
++      "provides_ports": [
++        "SafetyPort@1"
++      ],
++      "requires": [],
++      "risk": 0.1,
++      "evidence_strength": 0.5
++    }
++  ],
++  "weights": {
++    "P1": 3,
++    "P2": 2,
++    "P3": 2,
++    "P4": 1
++  }
++}
+diff --git a/runs/2025-10-13-demo-headless/meta/meta.events.ndjson b/runs/2025-10-13-demo-headless/meta/meta.events.ndjson
+new file mode 100644
+index 0000000000000000000000000000000000000000..d92e9722cad825e2500b20c0e1f0d5de204d431d
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/meta/meta.events.ndjson
+@@ -0,0 +1,3 @@
++{"schema":"tm-events@1","event":"META_PICK","ts":"2025-10-13T21:54:41.501Z","seq":1,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"compose","compose_sha256":"1cb93de5dbce39335b217bd1f561aa8dcae1e022a6273d3bf93dd09d9f65806c"},"detail":{"module":"worktree.manager@var1","gain":2.9200000000000004,"drivers":{"coverage_contribution":3,"coverage_goals":["P1"],"evidence_strength":0.7,"risk":0.2,"delta_cost":1,"hygiene":0.5,"bundle":["worktree.manager@var1"]},"profile":"conservative"}}
++{"schema":"tm-events@1","event":"META_PICK","ts":"2025-10-13T21:54:41.506Z","seq":2,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"compose","compose_sha256":"1cb93de5dbce39335b217bd1f561aa8dcae1e022a6273d3bf93dd09d9f65806c"},"detail":{"module":"git.diff.core@var4","gain":2.34,"drivers":{"coverage_contribution":3,"coverage_goals":["P3","P4"],"evidence_strength":0.65,"risk":0.15000000000000002,"delta_cost":2,"hygiene":0.5,"bundle":["safety.validation@var2","git.diff.core@var4"]},"profile":"conservative"}}
++{"schema":"tm-events@1","event":"META_PICK","ts":"2025-10-13T21:54:41.508Z","seq":3,"source":{"cli":"tm","version":"0.1.0"},"context":{"run_id":"meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4","mode":"compose","compose_sha256":"1cb93de5dbce39335b217bd1f561aa8dcae1e022a6273d3bf93dd09d9f65806c"},"detail":{"module":"git.index.controller@var1","gain":1.72,"drivers":{"coverage_contribution":2,"coverage_goals":["P2"],"evidence_strength":0.6,"risk":0.3,"delta_cost":1,"hygiene":0.5,"bundle":["git.index.controller@var1"]},"profile":"conservative"}}
+diff --git a/runs/2025-10-13-demo-headless/meta/report.json b/runs/2025-10-13-demo-headless/meta/report.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..138d907ae524abe9c6b211dd6384201a1c5ef40d
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/meta/report.json
+@@ -0,0 +1,73 @@
++{
++  "task_id": null,
++  "run_id": "meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4",
++  "compose_sha256": "1cb93de5dbce39335b217bd1f561aa8dcae1e022a6273d3bf93dd09d9f65806c",
++  "generated_at": "2025-10-13T21:54:41.547Z",
++  "coverage": {
++    "source": "runs/2025-10-13-demo-headless/meta/coverage.json",
++    "goals": [
++      "P1",
++      "P2",
++      "P3",
++      "P4"
++    ]
++  },
++  "picks": [
++    {
++      "module": "worktree.manager@var1",
++      "gain": 2.9200000000000004,
++      "drivers": {
++        "coverage_contribution": 3,
++        "coverage_goals": [
++          "P1"
++        ],
++        "evidence_strength": 0.7,
++        "risk": 0.2,
++        "delta_cost": 1,
++        "hygiene": 0.5,
++        "bundle": [
++          "worktree.manager@var1"
++        ]
++      },
++      "profile": "conservative"
++    },
++    {
++      "module": "git.diff.core@var4",
++      "gain": 2.34,
++      "drivers": {
++        "coverage_contribution": 3,
++        "coverage_goals": [
++          "P3",
++          "P4"
++        ],
++        "evidence_strength": 0.65,
++        "risk": 0.15000000000000002,
++        "delta_cost": 2,
++        "hygiene": 0.5,
++        "bundle": [
++          "safety.validation@var2",
++          "git.diff.core@var4"
++        ]
++      },
++      "profile": "conservative"
++    },
++    {
++      "module": "git.index.controller@var1",
++      "gain": 1.72,
++      "drivers": {
++        "coverage_contribution": 2,
++        "coverage_goals": [
++          "P2"
++        ],
++        "evidence_strength": 0.6,
++        "risk": 0.3,
++        "delta_cost": 1,
++        "hygiene": 0.5,
++        "bundle": [
++          "git.index.controller@var1"
++        ]
++      },
++      "profile": "conservative"
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/runs/2025-10-13-demo-headless/run.json b/runs/2025-10-13-demo-headless/run.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..c7b27043de59e019dcd7ee577fe309a1f84fe9f0
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/run.json
+@@ -0,0 +1,65 @@
++{
++  "task_id": "demo-headless",
++  "run_id": "meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4",
++  "created_at": "2025-10-13T21:54:40.360Z",
++  "artifacts": {
++    "events": "runs/2025-10-13-demo-headless/artifacts/events.ndjson"
++  },
++  "variants": [
++    {
++      "variant": 0,
++      "status": "ready",
++      "dir": "runs/2025-10-13-demo-headless/variants/var0",
++      "modules_dir": "runs/2025-10-13-demo-headless/variants/var0/modules",
++      "metadata": "runs/2025-10-13-demo-headless/variants/var0/variant.json",
++      "diff": "runs/2025-10-13-demo-headless/variants/var0/diff.patch",
++      "modules": {
++        "count": 5,
++        "ids": [
++          "git.diff.alt",
++          "git.diff.core",
++          "git.index.controller",
++          "safety.validation",
++          "worktree.manager"
++        ]
++      }
++    }
++  ],
++  "events_mode": "shipping",
++  "watch": {
++    "started_at": "2025-10-13T21:54:40.466Z",
++    "status": "ready",
++    "interval_ms": 5000,
++    "ended_at": "2025-10-13T21:54:40.579Z"
++  },
++  "harvest": {
++    "completed_at": "2025-10-13T21:54:41.066Z",
++    "variants": 1,
++    "modules": 5
++  },
++  "compose_sha256": "1cb93de5dbce39335b217bd1f561aa8dcae1e022a6273d3bf93dd09d9f65806c",
++  "meta": {
++    "coverage": "runs/2025-10-13-demo-headless/meta/coverage.json",
++    "compose": "runs/2025-10-13-demo-headless/meta/compose.json",
++    "report": "runs/2025-10-13-demo-headless/meta/report.json",
++    "events": "runs/2025-10-13-demo-headless/meta/meta.events.ndjson"
++  },
++  "updated_at": "2025-10-13T21:54:41.551Z",
++  "selection": {
++    "variant": 0,
++    "rationale": "auto-selected variant var0 from compose module set (ignored 1 extra module)",
++    "recorded_at": "2025-10-13T21:54:41.520Z",
++    "confirmed_at": "2025-10-13T21:54:45.717Z"
++  },
++  "winner": {
++    "dir": "runs/2025-10-13-demo-headless/winner",
++    "generated_at": "2025-10-13T21:54:45.716Z"
++  },
++  "gates": {
++    "events": "runs/2025-10-13-demo-headless/artifacts/events.ndjson",
++    "raw_events": "runs/2025-10-13-demo-headless/artifacts/events.gates.ndjson",
++    "variant": 0,
++    "completed_at": "2025-10-13T21:54:45.717Z",
++    "status": "passed"
++  }
++}
+\ No newline at end of file
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/.tm/port-checks/git.diff.core__DiffPort@1.ts b/runs/2025-10-13-demo-headless/variants/var0/.tm/port-checks/git.diff.core__DiffPort@1.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..b3d2ce0db96422e2f9d136125259283d21a82e3b
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/.tm/port-checks/git.diff.core__DiffPort@1.ts
+@@ -0,0 +1,4 @@
++import type { DiffPort } from '../../../../../../runtimes/ts/ports/index.js';
++import { diffPort as portExport } from '../../modules/git.diff.core/src/index.ts';
++const _check: DiffPort = portExport;
++export {};
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/.tm/port-checks/git.index.controller__IndexPort@1.ts b/runs/2025-10-13-demo-headless/variants/var0/.tm/port-checks/git.index.controller__IndexPort@1.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..4209703fec147c8d96886b5e4a95441738fb5773
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/.tm/port-checks/git.index.controller__IndexPort@1.ts
+@@ -0,0 +1,4 @@
++import type { IndexPort } from '../../../../../../runtimes/ts/ports/index.js';
++import { indexPort as portExport } from '../../modules/git.index.controller/src/index.ts';
++const _check: IndexPort = portExport;
++export {};
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/.tm/port-checks/safety.validation__SafetyPort@1.ts b/runs/2025-10-13-demo-headless/variants/var0/.tm/port-checks/safety.validation__SafetyPort@1.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..7ffbc3863267a5276daf08120a533ed63b9490d2
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/.tm/port-checks/safety.validation__SafetyPort@1.ts
+@@ -0,0 +1,4 @@
++import type { SafetyPort } from '../../../../../../runtimes/ts/ports/index.js';
++import { safetyPort as portExport } from '../../modules/safety.validation/src/index.ts';
++const _check: SafetyPort = portExport;
++export {};
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/.tm/port-checks/worktree.manager__WorktreePort@1.ts b/runs/2025-10-13-demo-headless/variants/var0/.tm/port-checks/worktree.manager__WorktreePort@1.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..5419d8279c9e20944f5e3ac5aaab04d38e314412
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/.tm/port-checks/worktree.manager__WorktreePort@1.ts
+@@ -0,0 +1,4 @@
++import type { WorktreePort } from '../../../../../../runtimes/ts/ports/index.js';
++import { handler as portExport } from '../../modules/worktree.manager/src/index.ts';
++const _check: WorktreePort = portExport;
++export {};
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/.tm/tsc.log b/runs/2025-10-13-demo-headless/variants/var0/.tm/tsc.log
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/.tm/tsconfig.json b/runs/2025-10-13-demo-headless/variants/var0/.tm/tsconfig.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..2e71ad0a1ed841a0f3059c6ede632728b26309f3
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/.tm/tsconfig.json
+@@ -0,0 +1,15 @@
++{
++  "compilerOptions": {
++    "module": "NodeNext",
++    "moduleResolution": "NodeNext",
++    "target": "ES2022",
++    "strict": true,
++    "skipLibCheck": true,
++    "allowImportingTsExtensions": true
++  },
++  "include": [
++    "../modules",
++    "port-checks",
++    "../../../../../runtimes/ts/ports"
++  ]
++}
+\ No newline at end of file
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/diff.patch b/runs/2025-10-13-demo-headless/variants/var0/diff.patch
+new file mode 100644
+index 0000000000000000000000000000000000000000..ade6860f3d920e1e1e965add410cbb4be468e89e
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/diff.patch
+@@ -0,0 +1,5 @@
++--- a/README.md
+++++ b/README.md
++@@
++-Old line
+++New line from variant
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.alt/module.json b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.alt/module.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..17c6a80a3764283495f3958ad0da4824ef57295a
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.alt/module.json
+@@ -0,0 +1,36 @@
++{
++  "id": "git.diff.alt",
++  "version": "0.1.0",
++  "summary": "Alternative diff provider for duplicate-provider fixtures",
++  "provides": [
++    "DiffPort@1"
++  ],
++  "requires": [
++    "SafetyPort@1"
++  ],
++  "inputs": {},
++  "outputs": {},
++  "side_effects": [
++    "Process:git",
++    "FS:read"
++  ],
++  "invariants": [
++    "deterministic(outputs | inputs)",
++    "conserves: no write outside worktree"
++  ],
++  "tests": [
++    "tests/spec_diff_tracked.json",
++    "tests/spec_diff_untracked.json"
++  ],
++  "port_exports": {
++    "DiffPort@1": { "file": "src/index.ts", "export": "diffPort" }
++  },
++  "evidence": [
++    {
++      "kind": "file",
++      "file": "src/lib.rs",
++      "lines": "1-40",
++      "note": "example placeholder"
++    }
++  ]
++}
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.alt/src/index.ts b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.alt/src/index.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a5a190677f9df1b1e94dc383e7719af611d5dd02
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.alt/src/index.ts
+@@ -0,0 +1,8 @@
++type DiffSpec = { paths: string[] };
++type DiffResult = { summary: string };
++
++export const diffPort = {
++  async diff(_spec: DiffSpec): Promise<DiffResult> {
++    return { summary: 'stub diff' };
++  }
++};
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.alt/src/lib.rs b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.alt/src/lib.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..329f22173fe78d20e50a958b94def3434b4a8dd9
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.alt/src/lib.rs
+@@ -0,0 +1 @@
++// placeholder
+\ No newline at end of file
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.alt/tests/runner.mjs b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.alt/tests/runner.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..a3e8096d9aceea2640b86ed5de06b80cdec89c14
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.alt/tests/runner.mjs
+@@ -0,0 +1,33 @@
++#!/usr/bin/env node
++import fs from 'fs/promises';
++import process from 'process';
++import path from 'path';
++
++const args = new Map(
++  process.argv.slice(2).map((value, idx, arr) => {
++    if (!value.startsWith('--')) return null;
++    return [value.replace(/^--/, ''), arr[idx + 1]];
++  }).filter(Boolean)
++);
++
++const specArg = args.get('spec');
++if (!specArg) {
++  console.error('Missing --spec argument');
++  process.exit(1);
++}
++
++const moduleRoot = args.get('moduleRoot');
++if (!moduleRoot) {
++  console.error('Missing --moduleRoot argument');
++  process.exit(1);
++}
++
++const specPath = path.isAbsolute(specArg) ? specArg : path.join(moduleRoot, specArg);
++const spec = JSON.parse(await fs.readFile(specPath, 'utf8'));
++
++if (!spec.name) {
++  console.error('Spec missing "name" field');
++  process.exit(1);
++}
++
++process.exit(0);
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.alt/tests/spec_diff_tracked.json b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.alt/tests/spec_diff_tracked.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..55053326c505690e1bf5a0530005d7fbd5c96857
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.alt/tests/spec_diff_tracked.json
+@@ -0,0 +1 @@
++{"name":"tracked"}
+\ No newline at end of file
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.alt/tests/spec_diff_untracked.json b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.alt/tests/spec_diff_untracked.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..61fa637d0ea68ee4990933f2d8e9809e7ef4254c
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.alt/tests/spec_diff_untracked.json
+@@ -0,0 +1 @@
++{"name":"untracked"}
+\ No newline at end of file
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.core/module.json b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.core/module.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..7051057adee1091a4f99b940d3a9b0eb51db6ae8
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.core/module.json
+@@ -0,0 +1,36 @@
++{
++  "id": "git.diff.core",
++  "version": "0.1.0",
++  "summary": "Unified tracked/untracked diff with --no-index fallback (example)",
++  "provides": [
++    "DiffPort@1"
++  ],
++  "requires": [
++    "SafetyPort@1"
++  ],
++  "inputs": {},
++  "outputs": {},
++  "side_effects": [
++    "Process:git",
++    "FS:read"
++  ],
++  "invariants": [
++    "deterministic(outputs | inputs)",
++    "conserves: no write outside worktree"
++  ],
++  "tests": [
++    "tests/spec_diff_tracked.json",
++    "tests/spec_diff_untracked.json"
++  ],
++  "port_exports": {
++    "DiffPort@1": { "file": "src/index.ts", "export": "diffPort" }
++  },
++  "evidence": [
++    {
++      "kind": "file",
++      "file": "src/lib.rs",
++      "lines": "1-40",
++      "note": "example placeholder"
++    }
++  ]
++}
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.core/src/index.ts b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.core/src/index.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a5a190677f9df1b1e94dc383e7719af611d5dd02
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.core/src/index.ts
+@@ -0,0 +1,8 @@
++type DiffSpec = { paths: string[] };
++type DiffResult = { summary: string };
++
++export const diffPort = {
++  async diff(_spec: DiffSpec): Promise<DiffResult> {
++    return { summary: 'stub diff' };
++  }
++};
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.core/src/lib.rs b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.core/src/lib.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..329f22173fe78d20e50a958b94def3434b4a8dd9
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.core/src/lib.rs
+@@ -0,0 +1 @@
++// placeholder
+\ No newline at end of file
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.core/tests/runner.mjs b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.core/tests/runner.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..a3e8096d9aceea2640b86ed5de06b80cdec89c14
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.core/tests/runner.mjs
+@@ -0,0 +1,33 @@
++#!/usr/bin/env node
++import fs from 'fs/promises';
++import process from 'process';
++import path from 'path';
++
++const args = new Map(
++  process.argv.slice(2).map((value, idx, arr) => {
++    if (!value.startsWith('--')) return null;
++    return [value.replace(/^--/, ''), arr[idx + 1]];
++  }).filter(Boolean)
++);
++
++const specArg = args.get('spec');
++if (!specArg) {
++  console.error('Missing --spec argument');
++  process.exit(1);
++}
++
++const moduleRoot = args.get('moduleRoot');
++if (!moduleRoot) {
++  console.error('Missing --moduleRoot argument');
++  process.exit(1);
++}
++
++const specPath = path.isAbsolute(specArg) ? specArg : path.join(moduleRoot, specArg);
++const spec = JSON.parse(await fs.readFile(specPath, 'utf8'));
++
++if (!spec.name) {
++  console.error('Spec missing "name" field');
++  process.exit(1);
++}
++
++process.exit(0);
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.core/tests/spec_diff_tracked.json b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.core/tests/spec_diff_tracked.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..55053326c505690e1bf5a0530005d7fbd5c96857
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.core/tests/spec_diff_tracked.json
+@@ -0,0 +1 @@
++{"name":"tracked"}
+\ No newline at end of file
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.core/tests/spec_diff_untracked.json b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.core/tests/spec_diff_untracked.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..61fa637d0ea68ee4990933f2d8e9809e7ef4254c
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/git.diff.core/tests/spec_diff_untracked.json
+@@ -0,0 +1 @@
++{"name":"untracked"}
+\ No newline at end of file
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/git.index.controller/module.json b/runs/2025-10-13-demo-headless/variants/var0/modules/git.index.controller/module.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..c6df44e7737bf37647976ba602d74f648cd5485f
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/git.index.controller/module.json
+@@ -0,0 +1,33 @@
++{
++  "id": "git.index.controller",
++  "version": "0.1.0",
++  "summary": "Stage/unstage/add/reset controller (example)",
++  "provides": [
++    "IndexPort@1"
++  ],
++  "requires": [],
++  "inputs": {},
++  "outputs": {},
++  "side_effects": [
++    "Process:git",
++    "FS:read",
++    "FS:write"
++  ],
++  "invariants": [
++    "idempotent(effect-free calls)"
++  ],
++  "tests": [
++    "tests/spec_index.json"
++  ],
++  "port_exports": {
++    "IndexPort@1": { "file": "src/index.ts", "export": "indexPort" }
++  },
++  "evidence": [
++    {
++      "kind": "file",
++      "file": "src/lib.rs",
++      "lines": "1-20",
++      "note": "example placeholder"
++    }
++  ]
++}
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/git.index.controller/src/index.ts b/runs/2025-10-13-demo-headless/variants/var0/modules/git.index.controller/src/index.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..0db709931936028ee87e29cdae1b0721d76cf070
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/git.index.controller/src/index.ts
+@@ -0,0 +1,10 @@
++type PathList = string[];
++
++export const indexPort = {
++  async stage(_paths: PathList): Promise<void> {
++    return;
++  },
++  async unstage(_paths: PathList): Promise<void> {
++    return;
++  }
++};
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/git.index.controller/src/lib.rs b/runs/2025-10-13-demo-headless/variants/var0/modules/git.index.controller/src/lib.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..329f22173fe78d20e50a958b94def3434b4a8dd9
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/git.index.controller/src/lib.rs
+@@ -0,0 +1 @@
++// placeholder
+\ No newline at end of file
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/git.index.controller/tests/runner.mjs b/runs/2025-10-13-demo-headless/variants/var0/modules/git.index.controller/tests/runner.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..a3e8096d9aceea2640b86ed5de06b80cdec89c14
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/git.index.controller/tests/runner.mjs
+@@ -0,0 +1,33 @@
++#!/usr/bin/env node
++import fs from 'fs/promises';
++import process from 'process';
++import path from 'path';
++
++const args = new Map(
++  process.argv.slice(2).map((value, idx, arr) => {
++    if (!value.startsWith('--')) return null;
++    return [value.replace(/^--/, ''), arr[idx + 1]];
++  }).filter(Boolean)
++);
++
++const specArg = args.get('spec');
++if (!specArg) {
++  console.error('Missing --spec argument');
++  process.exit(1);
++}
++
++const moduleRoot = args.get('moduleRoot');
++if (!moduleRoot) {
++  console.error('Missing --moduleRoot argument');
++  process.exit(1);
++}
++
++const specPath = path.isAbsolute(specArg) ? specArg : path.join(moduleRoot, specArg);
++const spec = JSON.parse(await fs.readFile(specPath, 'utf8'));
++
++if (!spec.name) {
++  console.error('Spec missing "name" field');
++  process.exit(1);
++}
++
++process.exit(0);
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/git.index.controller/tests/spec_index.json b/runs/2025-10-13-demo-headless/variants/var0/modules/git.index.controller/tests/spec_index.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..b06c73a2e59b45feade9d5f1e55fa1999cac04d2
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/git.index.controller/tests/spec_index.json
+@@ -0,0 +1 @@
++{"name":"index"}
+\ No newline at end of file
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/safety.validation/module.json b/runs/2025-10-13-demo-headless/variants/var0/modules/safety.validation/module.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..cd1ff1fed2f53edcc04c2ed2a9bdeb7823fe410b
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/safety.validation/module.json
+@@ -0,0 +1,31 @@
++{
++  "id": "safety.validation",
++  "version": "0.1.0",
++  "summary": "Path normalization and platform quirks (example)",
++  "provides": [
++    "SafetyPort@1"
++  ],
++  "requires": [],
++  "inputs": {},
++  "outputs": {},
++  "side_effects": [],
++  "invariants": [
++    "no network",
++    "no external processes"
++  ],
++  "tests": [
++    "tests/spec_paths.json",
++    "script:tests/run_win_cases.mjs"
++  ],
++  "port_exports": {
++    "SafetyPort@1": { "file": "src/index.ts", "export": "safetyPort" }
++  },
++  "evidence": [
++    {
++      "kind": "file",
++      "file": "src/lib.rs",
++      "lines": "1-30",
++      "note": "example placeholder"
++    }
++  ]
++}
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/safety.validation/src/index.ts b/runs/2025-10-13-demo-headless/variants/var0/modules/safety.validation/src/index.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..ba3598e060bc51bc00efa33c01ddf00093443fd3
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/safety.validation/src/index.ts
+@@ -0,0 +1,132 @@
++declare const process: { platform: string } | undefined;
++
++const WINDOWS_RESERVED = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$/i;
++const PLATFORM = typeof process !== 'undefined' ? process.platform : 'linux';
++const isWindows = PLATFORM === 'win32';
++
++function toForwardSlashes(p: string): string {
++  return p.replace(/\\/g, '/');
++}
++
++function fromWslPath(input: string): string | null {
++  const forward = toForwardSlashes(input).replace(/^\/\/+/, '/');
++  const match = /^\/mnt\/([a-zA-Z])\/(.*)$/.exec(forward);
++  if (!match) return null;
++  const [, drive, rest] = match;
++  return `${drive.toUpperCase()}:\\${rest.replace(/\//g, '\\')}`;
++}
++
++function collapseSegments(parts: string[], allowAboveRoot: boolean): string[] {
++  const stack: string[] = [];
++  for (const part of parts) {
++    if (!part || part === '.') continue;
++    if (part === '..') {
++      if (stack.length > 0) {
++        stack.pop();
++      } else if (allowAboveRoot) {
++        stack.push('..');
++      }
++      continue;
++    }
++    stack.push(part);
++  }
++  return stack;
++}
++
++interface WindowsSplit {
++  prefix: string;
++  segments: string[];
++  kind: 'unc' | 'drive' | 'relative';
++}
++
++function splitWindowsPath(value: string): WindowsSplit {
++  if (value.startsWith('\\\\')) {
++    const trimmed = value.replace(/^\\\\/, '');
++    const parts = trimmed.split(/\\+/).filter(Boolean);
++    const host = parts.shift() || '';
++    const share = parts.shift() || '';
++    const prefix = `\\\\${host}${share ? `\\${share}` : ''}`;
++    return { prefix, segments: parts, kind: 'unc' };
++  }
++  const driveMatch = /^([A-Za-z]):(.*)$/.exec(value);
++  if (driveMatch) {
++    const drive = driveMatch[1].toUpperCase();
++    const rest = driveMatch[2].replace(/^\\+/, '');
++    const segments = rest.split(/\\+/).filter(Boolean);
++    return { prefix: `${drive}:`, segments, kind: 'drive' };
++  }
++  const trimmed = value.replace(/^\\+/, '');
++  const segments = trimmed.split(/\\+/).filter(Boolean);
++  return { prefix: '', segments, kind: 'relative' };
++}
++
++function normalizeWindowsPath(raw: string): string {
++  let value = raw.trim();
++  if (!value) return '';
++  const fromWsl = fromWslPath(value);
++  if (fromWsl) value = fromWsl;
++  value = value.replace(/\//g, '\\');
++  value = value.replace(/^\\\\\?\\UNC\\/i, '\\\\');
++  value = value.replace(/^\\\\\?\\/, '');
++  value = value.replace(/^([a-z])\:/, (_, letter) => `${letter.toUpperCase()}:`);
++  const split = splitWindowsPath(value);
++  const collapsed = collapseSegments(split.segments, split.kind === 'relative');
++  if (split.kind === 'unc') {
++    const suffix = collapsed.length ? `\\${collapsed.join('\\')}` : '';
++    return `${split.prefix}${suffix}`;
++  }
++  if (split.kind === 'drive') {
++    const suffix = collapsed.length ? `\\${collapsed.join('\\')}` : '';
++    return `${split.prefix}${suffix || '\\'}`;
++  }
++  return collapsed.join('\\');
++}
++
++function normalizePosixPath(raw: string): string {
++  const trimmed = raw.trim();
++  if (!trimmed) return '';
++  const forward = toForwardSlashes(trimmed);
++  const absolute = forward.startsWith('/');
++  const parts = forward.split('/').filter(Boolean);
++  const collapsed = collapseSegments(parts, !absolute);
++  const body = collapsed.join('/');
++  if (absolute) return '/' + body;
++  return body;
++}
++
++function hasTraversal(raw: string): boolean {
++  return /(^|[\\/])\.\.([\\/]|$)/.test(raw);
++}
++
++export const safetyPort = {
++  async normalizePath(p: string): Promise<string> {
++    if (typeof p !== 'string') {
++      throw new TypeError('Path must be a string');
++    }
++    if (!p.trim()) return '';
++    return isWindows ? normalizeWindowsPath(p) : normalizePosixPath(p);
++  },
++
++  async isSafe(p: string): Promise<boolean> {
++    if (typeof p !== 'string') return false;
++    const trimmed = p.trim();
++    if (!trimmed) return false;
++    if (hasTraversal(trimmed)) return false;
++
++    if (isWindows) {
++      const normalized = await this.normalizePath(trimmed);
++      if (!normalized) return false;
++      if (normalized.startsWith('\\\\?\\') || normalized.startsWith('\\\\.\\')) return false;
++      if (normalized.startsWith('\\\\')) return false;
++      if (!/^[A-Za-z]:\\/.test(normalized)) return false;
++      const segments = normalized.split(/[\\/]+/).filter(Boolean);
++      const leaf = segments[segments.length - 1];
++      if (WINDOWS_RESERVED.test(leaf)) return false;
++      return true;
++    }
++
++    const normalizedPosix = normalizePosixPath(trimmed);
++    if (!normalizedPosix.startsWith('/')) return false;
++    return true;
++  }
++};
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/safety.validation/src/lib.rs b/runs/2025-10-13-demo-headless/variants/var0/modules/safety.validation/src/lib.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..329f22173fe78d20e50a958b94def3434b4a8dd9
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/safety.validation/src/lib.rs
+@@ -0,0 +1 @@
++// placeholder
+\ No newline at end of file
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/safety.validation/tests/run_win_cases.mjs b/runs/2025-10-13-demo-headless/variants/var0/modules/safety.validation/tests/run_win_cases.mjs
+new file mode 100755
+index 0000000000000000000000000000000000000000..5872797c83a6e69523844afbe589feb741ad2a3a
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/safety.validation/tests/run_win_cases.mjs
+@@ -0,0 +1,89 @@
++#!/usr/bin/env node
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import path from 'node:path';
++import process from 'node:process';
++import { fileURLToPath } from 'node:url';
++import ts from 'typescript';
++
++if (process.platform !== 'win32') {
++  console.log(`SKIP SafetyPort Windows cases (platform=${process.platform})`);
++  process.exit(0);
++}
++
++const __filename = fileURLToPath(import.meta.url);
++const testsDir = path.dirname(__filename);
++const moduleRoot = path.resolve(testsDir, '..');
++const specPath = path.join(testsDir, 'spec_paths_windows.json');
++
++let spec;
++try {
++  spec = JSON.parse(await fs.readFile(specPath, 'utf8'));
++} catch (err) {
++  console.error(`Failed to load ${specPath}:`, err instanceof Error ? err.message : err);
++  process.exit(1);
++}
++
++if (!spec || typeof spec.name !== 'string') {
++  console.error('Spec missing "name" field');
++  process.exit(1);
++}
++
++const tsSourcePath = path.join(moduleRoot, 'src', 'index.ts');
++const tsSource = await fs.readFile(tsSourcePath, 'utf8');
++const transpiled = ts.transpileModule(tsSource, {
++  compilerOptions: {
++    module: ts.ModuleKind.ES2020,
++    target: ts.ScriptTarget.ES2020,
++    esModuleInterop: true
++  }
++});
++
++const moduleUrl = `data:text/javascript;base64,${Buffer.from(transpiled.outputText, 'utf8').toString('base64')}`;
++const moduleExports = await import(moduleUrl);
++const safetyPort = moduleExports?.safetyPort;
++if (!safetyPort) {
++  console.error('SafetyPort provider not exported from src/index.ts');
++  process.exit(1);
++}
++
++const failures = [];
++let assertions = 0;
++
++for (const entry of spec.normalize || []) {
++  if (!entry) continue;
++  const actual = await safetyPort.normalizePath(entry.input);
++  const expected = entry.expect;
++  assertions += 1;
++  if (actual !== expected) {
++    failures.push(`normalizePath(${JSON.stringify(entry.input)}) → ${JSON.stringify(actual)} (expected ${JSON.stringify(expected)})`);
++  }
++}
++
++for (const entry of spec.safe || []) {
++  if (!entry) continue;
++  const actual = await safetyPort.isSafe(entry.path);
++  const expected = Boolean(entry.expected);
++  assertions += 1;
++  if (actual !== expected) {
++    failures.push(`isSafe(${JSON.stringify(entry.path)}) → ${actual} (expected ${expected})`);
++  }
++}
++
++for (const entry of spec.unsafe || []) {
++  const actual = await safetyPort.isSafe(entry);
++  assertions += 1;
++  if (actual !== false) {
++    failures.push(`isSafe(${JSON.stringify(entry)}) should be false but returned ${actual}`);
++  }
++}
++
++if (failures.length > 0) {
++  console.error(`SafetyPort Windows cases failed (${failures.length}):`);
++  for (const failure of failures) {
++    console.error(` - ${failure}`);
++  }
++  process.exit(1);
++}
++
++console.log(`PASS ${spec.name} (${assertions} assertions)`);
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/safety.validation/tests/runner.mjs b/runs/2025-10-13-demo-headless/variants/var0/modules/safety.validation/tests/runner.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..a3e8096d9aceea2640b86ed5de06b80cdec89c14
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/safety.validation/tests/runner.mjs
+@@ -0,0 +1,33 @@
++#!/usr/bin/env node
++import fs from 'fs/promises';
++import process from 'process';
++import path from 'path';
++
++const args = new Map(
++  process.argv.slice(2).map((value, idx, arr) => {
++    if (!value.startsWith('--')) return null;
++    return [value.replace(/^--/, ''), arr[idx + 1]];
++  }).filter(Boolean)
++);
++
++const specArg = args.get('spec');
++if (!specArg) {
++  console.error('Missing --spec argument');
++  process.exit(1);
++}
++
++const moduleRoot = args.get('moduleRoot');
++if (!moduleRoot) {
++  console.error('Missing --moduleRoot argument');
++  process.exit(1);
++}
++
++const specPath = path.isAbsolute(specArg) ? specArg : path.join(moduleRoot, specArg);
++const spec = JSON.parse(await fs.readFile(specPath, 'utf8'));
++
++if (!spec.name) {
++  console.error('Spec missing "name" field');
++  process.exit(1);
++}
++
++process.exit(0);
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/safety.validation/tests/spec_paths.json b/runs/2025-10-13-demo-headless/variants/var0/modules/safety.validation/tests/spec_paths.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..63a1a829eb76d0f185a7accace66061002f676ba
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/safety.validation/tests/spec_paths.json
+@@ -0,0 +1 @@
++{"name":"paths"}
+\ No newline at end of file
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/safety.validation/tests/spec_paths_windows.json b/runs/2025-10-13-demo-headless/variants/var0/modules/safety.validation/tests/spec_paths_windows.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..ed8946ec549c061a92620381bd50746cf3f87cb0
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/safety.validation/tests/spec_paths_windows.json
+@@ -0,0 +1,27 @@
++{
++  "name": "windows-paths",
++  "normalize": [
++    {
++      "input": "C:/Users/Alice//Projects\\app",
++      "expect": "C:\\Users\\Alice\\Projects\\app"
++    },
++    {
++      "input": "/mnt/c/Users/Alice/Workspace",
++      "expect": "C:\\Users\\Alice\\Workspace"
++    },
++    {
++      "input": "C:\\Users\\Alice\\..\\Bob\\Repo",
++      "expect": "C:\\Users\\Bob\\Repo"
++    }
++  ],
++  "safe": [
++    { "path": "C:\\Users\\Alice\\Projects\\app", "expected": true },
++    { "path": "/mnt/c/Users/Alice/Workspace", "expected": true }
++  ],
++  "unsafe": [
++    "C:\\Windows\\System32\\..\\..\\Windows",
++    "\\\\server\\share\\payload.txt",
++    "C:\\Temp\\CON",
++    "relative\\path\\file.txt"
++  ]
++}
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/worktree.manager/module.json b/runs/2025-10-13-demo-headless/variants/var0/modules/worktree.manager/module.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..1e12e72688f6fd975fa0f4c72ffa2141b64e1970
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/worktree.manager/module.json
+@@ -0,0 +1,18 @@
++{
++  "id": "worktree.manager",
++  "version": "0.1.0",
++  "summary": "Stub worktree manager for headless smoke tests",
++  "provides": ["WorktreePort@1"],
++  "requires": [],
++  "inputs": {},
++  "outputs": {},
++  "side_effects": [],
++  "invariants": ["noop invariant"],
++  "tests": ["script:tests/pass.mjs"],
++  "port_exports": {
++    "WorktreePort@1": { "file": "src/index.ts", "export": "handler" }
++  },
++  "evidence": [
++    { "kind": "test", "note": "Headless stub" }
++  ]
++}
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/worktree.manager/src/index.ts b/runs/2025-10-13-demo-headless/variants/var0/modules/worktree.manager/src/index.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..20e0c8ed3acfcec07d4f263423ecbdbd077b7409
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/worktree.manager/src/index.ts
+@@ -0,0 +1,8 @@
++export const handler = {
++  async create(base: string, name: string) {
++    return { root: `${base}/${name}` };
++  },
++  async cleanup() {
++    return;
++  }
++};
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/modules/worktree.manager/tests/pass.mjs b/runs/2025-10-13-demo-headless/variants/var0/modules/worktree.manager/tests/pass.mjs
+new file mode 100755
+index 0000000000000000000000000000000000000000..c3698d4b6028db6102cd8668547865f3e6075811
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/modules/worktree.manager/tests/pass.mjs
+@@ -0,0 +1,2 @@
++#!/usr/bin/env node
++console.log('worktree.manager stub test pass');
+diff --git a/runs/2025-10-13-demo-headless/variants/var0/variant.json b/runs/2025-10-13-demo-headless/variants/var0/variant.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..11ca749fbfb3318f28fef58f5e584777c7735c18
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/variants/var0/variant.json
+@@ -0,0 +1,4 @@
++{
++  "variant_index": 0,
++  "status": "ready"
++}
+\ No newline at end of file
+diff --git a/runs/2025-10-13-demo-headless/winner/README.md b/runs/2025-10-13-demo-headless/winner/README.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..ad25551f8b1c2603589ec981b2ffcf32798caa18
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/winner/README.md
+@@ -0,0 +1,3 @@
++# Winner (scaffold)
++
++Generated by `tm compose`.
+\ No newline at end of file
+diff --git a/runs/2025-10-13-demo-headless/winner/report.json b/runs/2025-10-13-demo-headless/winner/report.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..5fe409357787bec7603d1d84fd17a1ad573245be
+--- /dev/null
++++ b/runs/2025-10-13-demo-headless/winner/report.json
+@@ -0,0 +1,35 @@
++{
++  "context": {
++    "run_id": "meta:conservative:d39a1fa64d518d8aa1e723f1e7ad1f4931340deebf5b98bc37713cb998350cc4",
++    "composer": "tm (scaffold)",
++    "generated_at": "2025-10-13T21:54:42.071Z"
++  },
++  "bill_of_materials": [
++    {
++      "id": "worktree.manager",
++      "version": "0.1.0"
++    },
++    {
++      "id": "safety.validation",
++      "version": "0.1.0"
++    },
++    {
++      "id": "git.diff.core",
++      "version": "0.1.0"
++    },
++    {
++      "id": "git.index.controller",
++      "version": "0.1.0"
++    }
++  ],
++  "wiring": [],
++  "glue": [],
++  "constraints": [
++    "no-cross-imports",
++    "ports-only-coupling"
++  ],
++  "notes": [
++    "This is a scaffold winner report generated without building/linking.",
++    "Use the full Composer to assemble code and run gates in shipping mode."
++  ]
++}
+\ No newline at end of file
+diff --git a/scripts/bo4-apply.sh b/scripts/bo4-apply.sh
+new file mode 100755
+index 0000000000000000000000000000000000000000..76d9cfa725129d032bf874708102b8cede4ae17d
+--- /dev/null
++++ b/scripts/bo4-apply.sh
+@@ -0,0 +1,111 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++usage() {
++  cat <<USAGE
++Usage: $0 --run-dir <dir> --base <branch> [--task <id>] [--push]
++USAGE
++  exit 1
++}
++
++RUN_DIR=""
++BASE_BRANCH=""
++TASK_OVERRIDE=""
++PUSH=0
++
++while [[ $# -gt 0 ]]; do
++  case "$1" in
++    --run-dir)
++      RUN_DIR=$2
++      shift 2
++      ;;
++    --base)
++      BASE_BRANCH=$2
++      shift 2
++      ;;
++    --task)
++      TASK_OVERRIDE=$2
++      shift 2
++      ;;
++    --push)
++      PUSH=1
++      shift
++      ;;
++    --help)
++      usage
++      ;;
++    *)
++      echo "Unknown option: $1" >&2
++      usage
++      ;;
++  esac
++done
++
++[[ -n "$RUN_DIR" && -n "$BASE_BRANCH" ]] || usage
++
++RUN_DIR=$(realpath "$RUN_DIR")
++MANIFEST="$RUN_DIR/run.json"
++[[ -f "$MANIFEST" ]] || { echo "run.json not found in $RUN_DIR" >&2; exit 1; }
++
++info_from_manifest() {
++  node -e "const fs=require('fs');const data=JSON.parse(fs.readFileSync('$MANIFEST','utf8'));const key=process.argv[1];const path=key.split('.');let cur=data;for(const seg of path){if(cur&&Object.prototype.hasOwnProperty.call(cur,seg)){cur=cur[seg];}else{cur=null;break;}}if(typeof cur==='object'&&cur!==null){console.log(JSON.stringify(cur));}else if(cur==null){process.exit(1);}else{console.log(cur);}"
++}
++
++TASK_ID="$TASK_OVERRIDE"
++if [[ -z "$TASK_ID" ]]; then
++  TASK_ID=$(info_from_manifest task_id 2>/dev/null || true)
++fi
++if [[ -z "$TASK_ID" ]]; then
++  echo "Task id not found; use --task" >&2
++  exit 1
++fi
++
++VARIANT=$(info_from_manifest selection.variant 2>/dev/null || true)
++if [[ -z "$VARIANT" ]]; then
++  echo "Selected variant not found in manifest; run bo4-meta-run before apply" >&2
++  exit 1
++fi
++
++VARIANT_COUNT=$(node -e "const fs=require('fs');const data=JSON.parse(fs.readFileSync('$MANIFEST','utf8'));console.log(Array.isArray(data.variants)?data.variants.length:0);")
++WINNER_REL=$(info_from_manifest winner.dir 2>/dev/null || true)
++if [[ -z "$WINNER_REL" ]]; then
++  WINNER_REL="$(realpath --relative-to="$(git rev-parse --show-toplevel)" "$RUN_DIR/winner")"
++fi
++WINNER_ABS=$(realpath "$RUN_DIR/winner")
++
++CODEX_BIN=${CODEX_BIN:-codex}
++
++if [[ $VARIANT_COUNT -le 1 ]]; then
++  echo "Single variant; running codex cloud apply --preflight"
++  "$CODEX_BIN" cloud apply "$TASK_ID" --variant "$VARIANT" --preflight
++  exit 0
++fi
++
++REPO_ROOT=$(git rev-parse --show-toplevel)
++cd "$REPO_ROOT"
++
++if [[ -n $(git status --porcelain) ]]; then
++  echo "Working tree dirty; commit or stash changes first" >&2
++  exit 1
++fi
++
++git checkout "$BASE_BRANCH"
++BRANCH="bo4/$TASK_ID/winner"
++if git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
++  git switch "$BRANCH"
++else
++  git switch -c "$BRANCH"
++fi
++
++git add "$WINNER_REL"
++if git diff --cached --quiet; then
++  echo "No changes to commit from $WINNER_REL"
++else
++  git commit -m "chore: codex cloud $TASK_ID winner"
++fi
++
++if [[ $PUSH -eq 1 ]]; then
++  git push -u origin "$BRANCH"
++fi
++
++echo "Branch ready: $BRANCH"
+diff --git a/scripts/bo4-compose.mjs b/scripts/bo4-compose.mjs
+new file mode 100755
+index 0000000000000000000000000000000000000000..00462b3a863f1c03cb4e6abdd792c7e69e9fcbd8
+--- /dev/null
++++ b/scripts/bo4-compose.mjs
+@@ -0,0 +1,213 @@
++#!/usr/bin/env node
++import path from 'path';
++import { spawn } from 'child_process';
++import { fileURLToPath } from 'url';
++import {
++  ensureDir,
++  loadManifest,
++  updateManifest,
++  eventsPath,
++  readNdjson,
++  writeNdjson,
++  resequenceEvents,
++  relativize,
++  nowIso
++} from './lib/headless-utils.mjs';
++
++const __filename = fileURLToPath(import.meta.url);
++const __dirname = path.dirname(__filename);
++const repoRoot = path.resolve(__dirname, '..');
++
++function usage() {
++  console.error('Usage: node scripts/bo4-compose.mjs --run-dir <dir> [--variant <n>]');
++  process.exit(1);
++}
++
++function parseArgs(argv) {
++  const out = { positional: [] };
++  for (let i = 0; i < argv.length; i += 1) {
++    const arg = argv[i];
++    if (arg.startsWith('--')) {
++      const key = arg.replace(/^--/, '');
++      const next = argv[i + 1];
++      if (!next || next.startsWith('--')) {
++        out[key] = true;
++      } else {
++        out[key] = next;
++        i += 1;
++      }
++    } else {
++      out.positional.push(arg);
++    }
++  }
++  return out;
++}
++
++function runCmd(cmd, args, opts = {}) {
++  return new Promise((resolve, reject) => {
++    const child = spawn(cmd, args, { cwd: opts.cwd, stdio: ['inherit', 'inherit', 'pipe'] });
++    let stderr = '';
++    child.stderr.on('data', chunk => { stderr += chunk; });
++    child.on('error', err => reject(err));
++    child.on('exit', code => {
++      if (code === 0) resolve({ stderr });
++      else {
++        const error = new Error(stderr.trim() || `Exit ${code}`);
++        error.stderr = stderr;
++        error.exitCode = code;
++        reject(error);
++      }
++    });
++  });
++}
++
++function resolveVariant(manifest, requestedVariant) {
++  const variants = manifest?.variants || [];
++  if (!variants.length) {
++    throw new Error('No harvested variants available. Run bo4-harvest first.');
++  }
++
++  const selected = manifest?.selection?.variant;
++  if (selected === undefined || selected === null) {
++    throw new Error('run.json.selection.variant missing. Run bo4-meta-run to record the winning variant.');
++  }
++
++  if (requestedVariant !== undefined && String(requestedVariant) !== String(selected)) {
++    throw new Error(`Variant mismatch: manifest selection is ${selected} but --variant ${requestedVariant} was provided`);
++  }
++
++  const entry = variants.find(v => String(v.variant) === String(selected));
++  if (!entry) {
++    throw new Error(`Selected variant ${selected} not found in manifest. Re-run bo4-harvest.`);
++  }
++  return entry;
++}
++
++function absoluteFromRelative(p) {
++  if (!p) return null;
++  if (path.isAbsolute(p)) return p;
++  return path.resolve(repoRoot, p);
++}
++
++function firstFailure(events) {
++  return events.find(evt => typeof evt?.event === 'string' && evt.event.endsWith('_FAIL')) || null;
++}
++
++function describeFailure(evt, gatesEventsPath) {
++  if (!evt) return `Gates failed. Inspect ${gatesEventsPath}`;
++  const detail = evt.detail || {};
++  const parts = [evt.event];
++  if (detail.code) parts.push(detail.code);
++  if (detail.module) parts.push(detail.module);
++  if (detail.test) parts.push(detail.test);
++  if (detail.message) parts.push(detail.message);
++  const artifact = detail.artifact ? detail.artifact : gatesEventsPath;
++  parts.push(`See ${artifact}`);
++  return parts.filter(Boolean).join(' · ');
++}
++
++async function main() {
++  const args = parseArgs(process.argv.slice(2));
++  const runDirArg = args['run-dir'] || args.runDir;
++  const variantArg = args.variant;
++  if (!runDirArg) usage();
++
++  const runDir = path.resolve(runDirArg);
++  const manifest = await loadManifest(runDir);
++  const variantEntry = resolveVariant(manifest, variantArg);
++  const composePath = path.join(runDir, 'meta', 'compose.json');
++  const winnerDir = path.join(runDir, 'winner');
++  await ensureDir(winnerDir);
++
++  const fallbackModules = path.join(runDir, 'variants', `var${variantEntry.variant}`, 'modules');
++  const modulesDir = absoluteFromRelative(variantEntry.modules_dir) || fallbackModules;
++  if (!modulesDir) {
++    throw new Error(`Variant ${variantEntry.variant} missing modules_dir in manifest.`);
++  }
++
++  const composeArgs = [
++    path.join(repoRoot, 'tm.mjs'),
++    'compose',
++    '--compose', composePath,
++    '--modules-root', modulesDir,
++    '--out', winnerDir
++  ];
++
++  await runCmd(process.execPath, composeArgs, { cwd: repoRoot });
++
++  const gatesEventsPath = path.join(runDir, 'artifacts', 'events.gates.ndjson');
++  const watchBackupPath = path.join(runDir, 'artifacts', 'events.watch.ndjson');
++  const existingWatchEvents = await readNdjson(eventsPath(runDir));
++  if (existingWatchEvents.length) {
++    await writeNdjson(watchBackupPath, existingWatchEvents);
++  }
++
++  const gatesArgs = [
++    path.join(repoRoot, 'tm.mjs'),
++    'gates', 'shipping',
++    '--compose', composePath,
++    '--modules-root', modulesDir,
++    '--emit-events',
++    '--events-out', gatesEventsPath,
++    '--events-truncate',
++    '--strict-events'
++  ];
++
++  let gatesFailed = false;
++  try {
++    await runCmd(process.execPath, gatesArgs, { cwd: repoRoot });
++  } catch (err) {
++    gatesFailed = true;
++    console.error(err?.message || String(err));
++  }
++
++  const gatesEvents = await readNdjson(gatesEventsPath);
++  const gatingContext = gatesEvents[0]?.context || null;
++  const normalizedWatchEvents = existingWatchEvents.map(evt => {
++    if (!gatingContext) return evt;
++    const updatedContext = {
++      ...(evt.context || {}),
++      compose_sha256: gatingContext.compose_sha256,
++      run_id: gatingContext.run_id
++    };
++    return { ...evt, context: updatedContext };
++  });
++  const merged = [
++    ...resequenceEvents(normalizedWatchEvents, 0),
++    ...resequenceEvents(gatesEvents, normalizedWatchEvents.length)
++  ];
++  await writeNdjson(eventsPath(runDir), merged);
++
++  await updateManifest(runDir, current => {
++    const next = { ...current };
++    const selection = current.selection || {};
++    next.selection = {
++      ...selection,
++      variant: variantEntry.variant,
++      confirmed_at: nowIso()
++    };
++    next.winner = {
++      dir: relativize(winnerDir),
++      generated_at: nowIso()
++    };
++    next.gates = {
++      events: relativize(eventsPath(runDir)),
++      raw_events: relativize(gatesEventsPath),
++      variant: variantEntry.variant,
++      completed_at: nowIso(),
++      status: gatesFailed ? 'failed' : 'passed'
++    };
++    return next;
++  });
++
++  if (gatesFailed) {
++    const failure = firstFailure(gatesEvents);
++    const message = describeFailure(failure, relativize(gatesEventsPath));
++    throw new Error(message);
++  }
++}
++
++main().catch(err => {
++  console.error(err?.stack || err?.message || String(err));
++  process.exit(1);
++});
+diff --git a/scripts/bo4-harvest.mjs b/scripts/bo4-harvest.mjs
+new file mode 100755
+index 0000000000000000000000000000000000000000..76b192654cfb23d709796b63d24851307f5e24e1
+--- /dev/null
++++ b/scripts/bo4-harvest.mjs
+@@ -0,0 +1,204 @@
++#!/usr/bin/env node
++import fsp from 'fs/promises';
++import path from 'path';
++import { spawn } from 'child_process';
++import { fileURLToPath } from 'url';
++import {
++  ensureDir,
++  updateManifest,
++  relativize,
++  nowIso
++} from './lib/headless-utils.mjs';
++import { tmError } from './lib/provider-analysis.mjs';
++
++const __filename = fileURLToPath(import.meta.url);
++const __dirname = path.dirname(__filename);
++
++function usage() {
++  console.error('Usage: node scripts/bo4-harvest.mjs <task_id> --run-dir <dir>');
++  process.exit(1);
++}
++
++function parseArgs(argv) {
++  const out = { positional: [] };
++  for (let i = 0; i < argv.length; i += 1) {
++    const arg = argv[i];
++    if (arg.startsWith('--')) {
++      const key = arg.replace(/^--/, '');
++      const next = argv[i + 1];
++      if (!next || next.startsWith('--')) {
++        out[key] = true;
++      } else {
++        out[key] = next;
++        i += 1;
++      }
++    } else {
++      out.positional.push(arg);
++    }
++  }
++  return out;
++}
++
++function runCmd(cmd, args, opts = {}) {
++  return new Promise((resolve, reject) => {
++    const child = spawn(cmd, args, { cwd: opts.cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: true });
++    let stdout = '';
++    let stderr = '';
++    child.stdout.on('data', chunk => { stdout += chunk; });
++    child.stderr.on('data', chunk => { stderr += chunk; });
++    child.on('error', err => reject(err));
++    child.on('exit', code => {
++      if (code === 0) resolve({ stdout, stderr });
++      else {
++        const error = new Error(stderr.trim() || stdout.trim() || `Exit ${code}`);
++        error.stdout = stdout;
++        error.stderr = stderr;
++        error.exitCode = code;
++        reject(error);
++      }
++    });
++  });
++}
++
++function parseJson(data, fallback) {
++  try {
++    return JSON.parse(data);
++  } catch (err) {
++    if (fallback !== undefined) return fallback;
++    throw err;
++  }
++}
++
++function listVariants(payload) {
++  if (!payload) return [];
++  if (Array.isArray(payload)) return payload;
++  if (Array.isArray(payload.variants)) return payload.variants;
++  return [];
++}
++
++function variantIndex(entry) {
++  return entry?.variant_index ?? entry?.variantIndex ?? entry?.index ?? entry?.id;
++}
++
++function isReadyVariant(entry) {
++  const status = (entry?.status || entry?.state || '').toLowerCase();
++  return status === 'ready' || status === 'completed' || status === 'complete';
++}
++
++async function collectModules(modulesDir, variantTag) {
++  async function traverse(dirPath, found) {
++    let entries;
++    try {
++      entries = await fsp.readdir(dirPath, { withFileTypes: true });
++    } catch (err) {
++      if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) {
++        throw tmError('E_VARIANT_NO_MODULES', `Variant ${variantTag} missing modules/ directory (${relativize(modulesDir)})`);
++      }
++      throw err;
++    }
++
++    for (const entry of entries) {
++      const entryPath = path.join(dirPath, entry.name);
++      if (entry.isDirectory()) {
++        await traverse(entryPath, found);
++      } else if (entry.isFile() && entry.name === 'module.json') {
++        try {
++          const raw = await fsp.readFile(entryPath, 'utf8');
++          const data = JSON.parse(raw);
++          const id = data?.id || data?.name || relativize(entryPath);
++          found.push({ id, path: entryPath });
++        } catch (err) {
++          throw tmError('E_VARIANT_NO_MODULES', `Variant ${variantTag} has unreadable module.json (${relativize(entryPath)})`);
++        }
++      }
++    }
++  }
++
++  const discovered = [];
++  await traverse(modulesDir, discovered);
++  if (discovered.length === 0) {
++    throw tmError('E_VARIANT_NO_MODULES', `Variant ${variantTag} contains no module.json files (${relativize(modulesDir)})`);
++  }
++  return discovered;
++}
++
++async function main() {
++  const args = parseArgs(process.argv.slice(2));
++  const taskId = args.positional[0] || args.task;
++  const runDirArg = args['run-dir'] || args.runDir;
++  if (!taskId || !runDirArg) usage();
++
++  const runDir = path.resolve(runDirArg);
++  await ensureDir(runDir);
++  const variantsRoot = path.join(runDir, 'variants');
++  await ensureDir(variantsRoot);
++
++  const codexBin = process.env.CODEX_BIN || 'codex';
++  const { stdout: showOut } = await runCmd(codexBin, ['cloud', 'show', taskId, '--json', '--all']);
++  const showPayload = parseJson(showOut, {});
++  const variants = listVariants(showPayload).filter(isReadyVariant);
++
++  if (variants.length === 0) {
++    console.warn(`No ready variants for task ${taskId}`);
++  }
++
++  const harvested = [];
++
++  for (const variant of variants) {
++    const index = variantIndex(variant);
++    if (index === undefined || index === null) continue;
++    const variantDir = path.join(variantsRoot, `var${index}`);
++    await fsp.rm(variantDir, { recursive: true, force: true });
++    await ensureDir(variantDir);
++
++    console.log(`Exporting variant ${index} → ${relativize(variantDir)}`);
++    await runCmd(codexBin, ['cloud', 'export', '--variant', String(index), '--dir', variantDir, taskId]);
++
++    const modulesDir = path.join(variantDir, 'modules');
++    const harvestedModules = await collectModules(modulesDir, `var${index}`);
++
++    const metadataPath = path.join(variantDir, 'variant.json');
++    await fsp.writeFile(metadataPath, JSON.stringify(variant, null, 2));
++
++    let diffRel = null;
++    try {
++      const { stdout: diffOut } = await runCmd(codexBin, ['cloud', 'diff', '--variant', String(index), taskId]);
++      const diffPath = path.join(variantDir, 'diff.patch');
++      await fsp.writeFile(diffPath, diffOut);
++      diffRel = relativize(diffPath);
++    } catch (err) {
++      // diff is optional; log but continue
++      console.warn(`codex cloud diff failed for var${index}: ${err.message || err}`);
++    }
++
++    harvested.push({
++      variant: index,
++      status: variant.status || variant.state || 'ready',
++      dir: relativize(variantDir),
++      modules_dir: relativize(modulesDir),
++      metadata: relativize(metadataPath),
++      diff: diffRel,
++      modules: {
++        count: harvestedModules.length,
++        ids: harvestedModules.map(mod => mod.id).sort()
++      }
++    });
++  }
++
++  await updateManifest(runDir, manifest => {
++    const next = { ...manifest };
++    next.task_id = next.task_id || taskId;
++    next.variants = harvested;
++    next.harvest = {
++      completed_at: nowIso(),
++      variants: harvested.length,
++      modules: harvested.reduce((sum, entry) => sum + (entry.modules?.count || 0), 0)
++    };
++    return next;
++  });
++}
++
++main().catch(err => {
++  console.error(err?.stack || err?.message || String(err));
++  process.exit(err?.code === 'E_VARIANT_NO_MODULES' ? 2 : 1);
++});
+diff --git a/scripts/bo4-loop.mjs b/scripts/bo4-loop.mjs
+new file mode 100755
+index 0000000000000000000000000000000000000000..7cd64fa40607cf6a9a67a853869a09867ffd4694
+--- /dev/null
++++ b/scripts/bo4-loop.mjs
+@@ -0,0 +1,155 @@
++#!/usr/bin/env node
++import path from 'path';
++import { spawn } from 'child_process';
++import { fileURLToPath } from 'url';
++import {
++  ensureDir,
++  updateManifest,
++  manifestPath,
++  relativize,
++  nowIso
++} from './lib/headless-utils.mjs';
++
++const __filename = fileURLToPath(import.meta.url);
++const __dirname = path.dirname(__filename);
++const repoRoot = path.resolve(__dirname, '..');
++
++function usage() {
++  console.error('Usage: node scripts/bo4-loop.mjs --task <id> --coverage <file> [--run-dir <dir>] [--profile <name>] [--weights <file>] [--variant <n>]');
++  process.exit(1);
++}
++
++function parseArgs(argv) {
++  const out = { positional: [] };
++  for (let i = 0; i < argv.length; i += 1) {
++    const arg = argv[i];
++    if (arg.startsWith('--')) {
++      const key = arg.replace(/^--/, '');
++      const next = argv[i + 1];
++      if (!next || next.startsWith('--')) {
++        out[key] = true;
++      } else {
++        out[key] = next;
++        i += 1;
++      }
++    } else {
++      out.positional.push(arg);
++    }
++  }
++  return out;
++}
++
++function slugify(value) {
++  return String(value)
++    .toLowerCase()
++    .replace(/[^a-z0-9]+/g, '-')
++    .replace(/^-+|-+$/g, '')
++    .replace(/-+/g, '-');
++}
++
++function defaultRunDir(taskId) {
++  const date = new Date().toISOString().slice(0, 10);
++  const slug = slugify(taskId);
++  return path.join(repoRoot, 'runs', `${date}-${slug || 'task'}`);
++}
++
++function runStep(cmd, args, { env = {}, label }) {
++  return new Promise((resolve, reject) => {
++    if (label) {
++      console.log(`\n::group::${label}`);
++    }
++    const child = spawn(cmd, args, {
++      cwd: repoRoot,
++      stdio: 'inherit',
++      env: { ...process.env, ...env }
++    });
++    child.on('error', err => {
++      if (label) console.log('::endgroup::');
++      reject(err);
++    });
++    child.on('exit', code => {
++      if (label) console.log('::endgroup::');
++      if (code === 0) resolve();
++      else reject(new Error(`${label || cmd} exited with code ${code}`));
++    });
++  });
++}
++
++async function main() {
++  const args = parseArgs(process.argv.slice(2));
++  const task = args.task || args.positional[0];
++  const coverage = args.coverage;
++  const profile = args.profile;
++  const weights = args.weights;
++  const runDir = path.resolve(args['run-dir'] || args.runDir || defaultRunDir(task || 'task'));
++  const variant = args.variant;
++  const intervalMs = args['interval-ms'];
++  const watchTimeout = args['watch-timeout-ms'];
++
++  if (!task || !coverage) usage();
++
++  await ensureDir(runDir);
++  await updateManifest(runDir, manifest => ({
++    ...manifest,
++    task_id: task,
++    run_id: manifest.run_id || `watch:${task}`,
++    created_at: manifest.created_at || nowIso(),
++    artifacts: manifest.artifacts || {}
++  }));
++
++  const watchArgs = [
++    path.join(repoRoot, 'scripts', 'codex-watch.mjs'),
++    task,
++    '--run-dir', runDir
++  ];
++  if (intervalMs) {
++    watchArgs.push('--interval-ms', intervalMs);
++  }
++  if (watchTimeout) {
++    watchArgs.push('--timeout-ms', watchTimeout);
++  }
++
++  const harvestArgs = [
++    path.join(repoRoot, 'scripts', 'bo4-harvest.mjs'),
++    task,
++    '--run-dir', runDir
++  ];
++
++  const metaArgs = [
++    path.join(repoRoot, 'scripts', 'bo4-meta-run.mjs'),
++    '--run-dir', runDir,
++    '--coverage', path.resolve(coverage)
++  ];
++  if (variant) {
++    metaArgs.push('--variant', variant);
++  }
++  if (profile) {
++    metaArgs.push('--profile', profile);
++  }
++  if (weights) {
++    metaArgs.push('--weights', path.resolve(weights));
++  }
++
++  const composeArgs = [
++    path.join(repoRoot, 'scripts', 'bo4-compose.mjs'),
++    '--run-dir', runDir
++  ];
++  if (variant) {
++    composeArgs.push('--variant', variant);
++  }
++
++  const env = { CODEX_BIN: process.env.CODEX_BIN || 'codex' };
++
++  await runStep(process.execPath, watchArgs, { env, label: 'codex watch' });
++  await runStep(process.execPath, harvestArgs, { env, label: 'harvest variants' });
++  await runStep(process.execPath, metaArgs, { env, label: 'meta compose' });
++  await runStep(process.execPath, composeArgs, { env, label: 'compose + gates' });
++
++  const manifestRel = relativize(manifestPath(runDir));
++  console.log(`\nHeadless run complete → ${manifestRel}`);
++}
++
++main().catch(err => {
++  console.error(err?.stack || err?.message || String(err));
++  process.exit(1);
++});
+diff --git a/scripts/bo4-meta-run.mjs b/scripts/bo4-meta-run.mjs
+new file mode 100755
+index 0000000000000000000000000000000000000000..545e3b39c83080e5aa3123b32b5cbe85f5f3ef43
+--- /dev/null
++++ b/scripts/bo4-meta-run.mjs
+@@ -0,0 +1,286 @@
++#!/usr/bin/env node
++import fsp from 'fs/promises';
++import path from 'path';
++import { spawn } from 'child_process';
++import { fileURLToPath } from 'url';
++import {
++  ensureDir,
++  updateManifest,
++  loadManifest,
++  eventsPath,
++  readNdjson,
++  writeNdjson,
++  sha256File,
++  nowIso,
++  relativize
++} from './lib/headless-utils.mjs';
++
++const __filename = fileURLToPath(import.meta.url);
++const __dirname = path.dirname(__filename);
++const repoRoot = path.resolve(__dirname, '..');
++
++function usage() {
++  console.error('Usage: node scripts/bo4-meta-run.mjs --run-dir <dir> --coverage <file> [--profile <name>] [--weights <file>]');
++  process.exit(1);
++}
++
++function parseArgs(argv) {
++  const out = { positional: [] };
++  for (let i = 0; i < argv.length; i += 1) {
++    const arg = argv[i];
++    if (arg.startsWith('--')) {
++      const key = arg.replace(/^--/, '');
++      const next = argv[i + 1];
++      if (!next || next.startsWith('--')) {
++        out[key] = true;
++      } else {
++        out[key] = next;
++        i += 1;
++      }
++    } else {
++      out.positional.push(arg);
++    }
++  }
++  return out;
++}
++
++function runCmd(cmd, args, opts = {}) {
++  return new Promise((resolve, reject) => {
++    const child = spawn(cmd, args, { cwd: opts.cwd, stdio: ['inherit', 'inherit', 'pipe'] });
++    let stderr = '';
++    child.stderr.on('data', chunk => { stderr += chunk; });
++    child.on('error', err => reject(err));
++    child.on('exit', code => {
++      if (code === 0) resolve({ stderr });
++      else {
++        const error = new Error(stderr.trim() || `Exit ${code}`);
++        error.exitCode = code;
++        error.stderr = stderr;
++        reject(error);
++      }
++    });
++  });
++}
++
++async function loadJson(filePath) {
++  const raw = await fsp.readFile(filePath, 'utf8');
++  return JSON.parse(raw);
++}
++
++async function copyCoverage(src, dest) {
++  await ensureDir(path.dirname(dest));
++  await fsp.copyFile(src, dest);
++}
++
++function metaEventsPath(runDir) {
++  return path.join(runDir, 'meta', 'meta.events.ndjson');
++}
++
++function metaCoveragePath(runDir) {
++  return path.join(runDir, 'meta', 'coverage.json');
++}
++
++function metaComposePath(runDir) {
++  return path.join(runDir, 'meta', 'compose.json');
++}
++
++function metaReportPath(runDir) {
++  return path.join(runDir, 'meta', 'report.json');
++}
++
++async function extractPicks(events) {
++  const picks = [];
++  for (const event of events) {
++    if (event?.event !== 'META_PICK') continue;
++    if (event.detail) {
++      picks.push({
++        module: event.detail.module,
++        gain: event.detail.gain,
++        drivers: event.detail.drivers,
++        profile: event.detail.profile
++      });
++    }
++  }
++  return picks;
++}
++
++function normalizeVariantId(value) {
++  if (value === undefined || value === null) return null;
++  const num = Number(value);
++  return Number.isNaN(num) ? String(value) : num;
++}
++
++function matchVariantFromCompose(manifest, compose) {
++  const variants = manifest?.variants || [];
++  if (!variants.length) return null;
++
++  const composeIds = (compose?.modules || [])
++    .map(mod => mod?.id)
++    .filter(Boolean);
++  if (!composeIds.length) return null;
++  const composeSet = new Set(composeIds);
++
++  const candidates = variants
++    .map(entry => {
++      const ids = entry?.modules?.ids || [];
++      if (!ids.length) return null;
++      const idSet = new Set(ids);
++      const missing = composeIds.filter(id => !idSet.has(id));
++      if (missing.length) return null;
++      const extras = ids.filter(id => !composeSet.has(id));
++      return { entry, extras: extras.length };
++    })
++    .filter(Boolean);
++
++  if (!candidates.length) return null;
++
++  candidates.sort((a, b) => a.extras - b.extras);
++  const best = candidates.filter(c => c.extras === candidates[0].extras);
++  if (best.length === 1) {
++    const chosen = best[0].entry;
++    const extraNote = best[0].extras
++      ? ` (ignored ${best[0].extras} extra module${best[0].extras === 1 ? '' : 's'})`
++      : '';
++    return {
++      variant: normalizeVariantId(chosen.variant),
++      rationale: `auto-selected variant var${chosen.variant} from compose module set${extraNote}`
++    };
++  }
++
++  return null;
++}
++
++function selectVariant(manifest, compose, variantOverride) {
++  const variants = manifest?.variants || [];
++  if (!variants.length) {
++    throw new Error('No harvested variants found in run manifest. Run bo4-harvest before meta.');
++  }
++
++  if (variantOverride !== undefined) {
++    const entry = variants.find(v => String(v.variant) === String(variantOverride));
++    if (!entry) {
++      throw new Error(`Requested variant ${variantOverride} not found in manifest`);
++    }
++    return {
++      variant: normalizeVariantId(entry.variant),
++      rationale: `cli override (--variant ${variantOverride})`
++    };
++  }
++
++  const inferred = matchVariantFromCompose(manifest, compose);
++  if (!inferred) {
++    throw new Error('Unable to determine winning variant from meta output. Provide --variant explicitly.');
++  }
++  return inferred;
++}
++
++async function rewriteWatchEvents(runDir, runId, composeSha) {
++  const watchPath = eventsPath(runDir);
++  const existing = await readNdjson(watchPath);
++  if (!existing.length) return;
++  const rewritten = existing.map(evt => ({
++    ...evt,
++    context: {
++      ...(evt.context || {}),
++      run_id: runId,
++      compose_sha256: composeSha,
++      mode: evt.context?.mode || 'shipping'
++    }
++  }));
++  await writeNdjson(watchPath, rewritten);
++}
++
++async function main() {
++  const args = parseArgs(process.argv.slice(2));
++  const runDirArg = args['run-dir'] || args.runDir;
++  const coverageArg = args.coverage;
++  const profile = args.profile;
++  const weights = args.weights;
++  const variantArg = args.variant;
++
++  if (!runDirArg || !coverageArg) usage();
++
++  const runDir = path.resolve(runDirArg);
++  const coverageSrc = path.resolve(coverageArg);
++  const metaDir = path.join(runDir, 'meta');
++  await ensureDir(metaDir);
++
++  const coverageCopy = metaCoveragePath(runDir);
++  await copyCoverage(coverageSrc, coverageCopy);
++
++  const composeOut = metaComposePath(runDir);
++  const eventsOut = metaEventsPath(runDir);
++
++  const metaArgs = [
++    path.join(repoRoot, 'tm.mjs'),
++    'meta',
++    '--coverage', coverageCopy,
++    '--out', composeOut,
++    '--emit-events',
++    '--events-out', eventsOut,
++    '--events-truncate',
++    '--strict-events'
++  ];
++  if (profile) {
++    metaArgs.push('--profile', profile);
++  }
++  if (weights) {
++    metaArgs.push('--weights', path.resolve(weights));
++  }
++
++  await runCmd(process.execPath, metaArgs, { cwd: repoRoot });
++
++  const compose = await loadJson(composeOut);
++  const composeSha = await sha256File(composeOut);
++  const metaEvents = await readNdjson(eventsOut);
++  const picks = await extractPicks(metaEvents);
++  const coverage = await loadJson(coverageCopy);
++
++  const manifest = await loadManifest(runDir);
++  const selection = selectVariant(manifest, compose, variantArg);
++
++  const report = {
++    task_id: compose.task_id || null,
++    run_id: compose.run_id,
++    compose_sha256: composeSha,
++    generated_at: nowIso(),
++    coverage: {
++      source: relativize(coverageCopy),
++      goals: coverage.goals || []
++    },
++    picks
++  };
++  const reportPath = metaReportPath(runDir);
++  await fsp.writeFile(reportPath, JSON.stringify(report, null, 2));
++
++  await rewriteWatchEvents(runDir, compose.run_id, composeSha);
++
++  await updateManifest(runDir, manifest => {
++    const next = { ...manifest };
++    next.task_id = next.task_id || manifest.task_id;
++    next.run_id = compose.run_id;
++    next.compose_sha256 = composeSha;
++    next.meta = {
++      coverage: relativize(coverageCopy),
++      compose: relativize(composeOut),
++      report: relativize(reportPath),
++      events: relativize(eventsOut)
++    };
++    if (selection) {
++      const existingSelection = manifest.selection || {};
++      next.selection = {
++        ...existingSelection,
++        variant: selection.variant,
++        rationale: selection.rationale,
++        recorded_at: nowIso()
++      };
++    }
++    next.updated_at = nowIso();
++    return next;
++  });
++}
++
++main().catch(err => {
++  console.error(err?.stack || err?.message || String(err));
++  process.exit(1);
++});
+diff --git a/scripts/codex-watch.mjs b/scripts/codex-watch.mjs
+new file mode 100755
+index 0000000000000000000000000000000000000000..6b57f64f202a6f30f94d5b0d72c100d1b350c905
+--- /dev/null
++++ b/scripts/codex-watch.mjs
+@@ -0,0 +1,255 @@
++#!/usr/bin/env node
++import fsp from 'fs/promises';
++import path from 'path';
++import { fileURLToPath } from 'url';
++import { spawn } from 'child_process';
++import {
++  ensureDir,
++  updateManifest,
++  eventsPath,
++  defaultEventContext,
++  defaultEventSource,
++  readLastSeq,
++  nowIso,
++  relativize
++} from './lib/headless-utils.mjs';
++
++const __filename = fileURLToPath(import.meta.url);
++const __dirname = path.dirname(__filename);
++
++function usage() {
++  console.error('Usage: node scripts/codex-watch.mjs <task_id> --run-dir <dir> [--interval-ms <n>] [--timeout-ms <n>]');
++  process.exit(1);
++}
++
++function parseArgs(argv) {
++  const out = { positional: [] };
++  for (let i = 0; i < argv.length; i += 1) {
++    const arg = argv[i];
++    if (arg.startsWith('--')) {
++      const key = arg.replace(/^--/, '');
++      const next = argv[i + 1];
++      if (!next || next.startsWith('--')) {
++        out[key] = true;
++      } else {
++        out[key] = next;
++        i += 1;
++      }
++    } else {
++      out.positional.push(arg);
++    }
++  }
++  return out;
++}
++
++function sleep(ms) {
++  return new Promise(resolve => setTimeout(resolve, ms));
++}
++
++function runCmd(cmd, args, { cwd } = {}) {
++  return new Promise((resolve, reject) => {
++    const child = spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: true });
++    let stdout = '';
++    let stderr = '';
++    child.stdout.on('data', chunk => { stdout += chunk; });
++    child.stderr.on('data', chunk => { stderr += chunk; });
++    child.on('error', err => {
++      reject(err);
++    });
++    child.on('exit', code => {
++      if (code === 0) resolve({ stdout, stderr });
++      else {
++        const error = new Error(stderr.trim() || stdout.trim() || `Exit ${code}`);
++        error.exitCode = code;
++        error.stdout = stdout;
++        error.stderr = stderr;
++        reject(error);
++      }
++    });
++  });
++}
++
++function normalizeTaskList(payload) {
++  if (!payload) return [];
++  if (Array.isArray(payload)) return payload;
++  if (Array.isArray(payload.tasks)) return payload.tasks;
++  if (Array.isArray(payload.items)) return payload.items;
++  return [];
++}
++
++function extractStatus(entry) {
++  if (!entry || typeof entry !== 'object') return null;
++  return entry.status || entry.state || null;
++}
++
++async function appendEvent({ eventsFile, seqRef, context, source }, event, detail) {
++  seqRef.value += 1;
++  const envelope = {
++    schema: 'tm-events@1',
++    event,
++    ts: nowIso(),
++    seq: seqRef.value,
++    source,
++    context,
++    ...(detail && Object.keys(detail).length ? { detail } : {})
++  };
++  await fsp.appendFile(eventsFile, JSON.stringify(envelope) + '\n');
++  return envelope;
++}
++
++async function main() {
++  const args = parseArgs(process.argv.slice(2));
++  const taskId = args.positional[0] || args.task;
++  const runDirArg = args['run-dir'] || args.runDir;
++  if (!taskId || !runDirArg) usage();
++
++  const runDir = path.resolve(runDirArg);
++  const codexBin = process.env.CODEX_BIN || 'codex';
++  const intervalMs = Number(args['interval-ms'] || 5000);
++  const timeoutMsRaw = args['timeout-ms'];
++  const timeoutMs = timeoutMsRaw ? Number(timeoutMsRaw) : null;
++  if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
++    console.error('--interval-ms must be a positive number');
++    process.exit(1);
++  }
++  if (timeoutMs !== null && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
++    console.error('--timeout-ms must be a positive number');
++    process.exit(1);
++  }
++
++  await ensureDir(runDir);
++  const eventsFile = eventsPath(runDir);
++  await ensureDir(path.dirname(eventsFile));
++
++  const manifest = await updateManifest(runDir, current => {
++    const next = { ...current };
++    if (!next.task_id) next.task_id = taskId;
++    next.events_mode = next.events_mode || 'shipping';
++    next.artifacts = next.artifacts || {};
++    next.artifacts.events = next.artifacts.events || relativize(eventsFile);
++    next.watch = {
++      ...(next.watch || {}),
++      started_at: nowIso(),
++      status: 'watching',
++      interval_ms: intervalMs
++    };
++    if (!next.run_id) next.run_id = `watch:${taskId}`;
++    return next;
++  });
++
++  const context = await defaultEventContext(manifest);
++  const source = await defaultEventSource();
++  const seqRef = { value: await readLastSeq(eventsFile) };
++
++  await appendEvent({ eventsFile, seqRef, context, source }, 'GATES_START', {
++    code: 'WATCH_START',
++    message: `Watching task ${taskId}`
++  });
++
++  const started = Date.now();
++  let lastStatus = null;
++  let lastEventAt = 0;
++
++  while (true) {
++    if (timeoutMs && Date.now() - started > timeoutMs) {
++      await appendEvent({ eventsFile, seqRef, context, source }, 'GATES_FAIL', {
++        code: 'WATCH_TIMEOUT',
++        message: `Timed out after ${timeoutMs}ms` }
++      );
++      await updateManifest(runDir, current => ({
++        ...current,
++        watch: {
++          ...(current.watch || {}),
++          ended_at: nowIso(),
++          status: 'timeout'
++        }
++      }));
++      process.exitCode = 1;
++      return;
++    }
++
++    try {
++      const { stdout } = await runCmd(codexBin, ['cloud', 'list', '--json']);
++      let payload;
++      try {
++        payload = JSON.parse(stdout || '[]');
++      } catch (err) {
++        await appendEvent({ eventsFile, seqRef, context, source }, 'GATES_WARN', {
++          code: 'WATCH_PARSE_ERROR',
++          message: `Failed to parse cloud list JSON: ${err.message || err}`
++        });
++        await sleep(intervalMs);
++        continue;
++      }
++      const entries = normalizeTaskList(payload);
++      const entry = entries.find(item => (
++        item && (item.task_id === taskId || item.id === taskId || item.taskId === taskId)
++      ));
++      if (!entry) {
++        const now = Date.now();
++        if (now - lastEventAt > intervalMs * 2) {
++          await appendEvent({ eventsFile, seqRef, context, source }, 'GATES_WARN', {
++            code: 'WATCH_NOT_FOUND',
++            message: `Task ${taskId} not present in cloud list`
++          });
++          lastEventAt = now;
++        }
++        await sleep(intervalMs);
++        continue;
++      }
++      const status = extractStatus(entry) || 'unknown';
++      if (status !== lastStatus) {
++        await appendEvent({ eventsFile, seqRef, context, source }, 'GATES_WARN', {
++          code: 'WATCH_STATUS',
++          message: status
++        });
++        lastStatus = status;
++        lastEventAt = Date.now();
++      }
++      if (status === 'ready') {
++        await appendEvent({ eventsFile, seqRef, context, source }, 'GATES_PASS', {
++          code: 'WATCH_READY',
++          message: `Task ${taskId} ready`
++        });
++        await updateManifest(runDir, current => ({
++          ...current,
++          watch: {
++            ...(current.watch || {}),
++            ended_at: nowIso(),
++            status: 'ready'
++          }
++        }));
++        return;
++      }
++      if (status === 'error' || status === 'failed' || status === 'cancelled') {
++        await appendEvent({ eventsFile, seqRef, context, source }, 'GATES_FAIL', {
++          code: 'WATCH_ERROR',
++          message: entry.error || entry.message || status
++        });
++        await updateManifest(runDir, current => ({
++          ...current,
++          watch: {
++            ...(current.watch || {}),
++            ended_at: nowIso(),
++            status: 'error',
++            error: entry.error || entry.message || status
++          }
++        }));
++        process.exitCode = 1;
++        return;
++      }
++    } catch (err) {
++      await appendEvent({ eventsFile, seqRef, context, source }, 'GATES_WARN', {
++        code: 'WATCH_COMMAND_ERROR',
++        message: err.message || String(err)
++      });
++    }
++
++    await sleep(intervalMs);
++  }
++}
++
++main().catch(err => {
++  console.error(err?.stack || err?.message || String(err));
++  process.exit(1);
++});
+diff --git a/scripts/lib/headless-utils.mjs b/scripts/lib/headless-utils.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..a69e06719c56e933f41e166b01f66e3eca77f2a8
+--- /dev/null
++++ b/scripts/lib/headless-utils.mjs
+@@ -0,0 +1,163 @@
++import fsp from 'fs/promises';
++import path from 'path';
++import crypto from 'crypto';
++import { fileURLToPath } from 'url';
++
++const __filename = fileURLToPath(import.meta.url);
++const __dirname = path.dirname(__filename);
++const repoRoot = path.resolve(__dirname, '..', '..');
++
++let pkgVersion = null;
++
++async function ensureDir(dir) {
++  await fsp.mkdir(dir, { recursive: true });
++}
++
++async function readJson(filePath) {
++  const raw = await fsp.readFile(filePath, 'utf8');
++  return JSON.parse(raw);
++}
++
++async function readJsonIfExists(filePath) {
++  try {
++    return await readJson(filePath);
++  } catch (err) {
++    if (err && err.code === 'ENOENT') return null;
++    throw err;
++  }
++}
++
++function manifestPath(runDir) {
++  return path.join(runDir, 'run.json');
++}
++
++async function loadManifest(runDir) {
++  const filePath = manifestPath(runDir);
++  const existing = await readJsonIfExists(filePath);
++  if (existing) return existing;
++  return {
++    task_id: null,
++    run_id: null,
++    created_at: new Date().toISOString(),
++    artifacts: {},
++    variants: []
++  };
++}
++
++async function saveManifest(runDir, manifest) {
++  const filePath = manifestPath(runDir);
++  await ensureDir(path.dirname(filePath));
++  await fsp.writeFile(filePath, JSON.stringify(manifest, null, 2));
++}
++
++async function updateManifest(runDir, updater) {
++  const manifest = await loadManifest(runDir);
++  const next = await updater(manifest) || manifest;
++  await saveManifest(runDir, next);
++  return next;
++}
++
++function eventsPath(runDir) {
++  return path.join(runDir, 'artifacts', 'events.ndjson');
++}
++
++async function readNdjson(filePath) {
++  try {
++    const raw = await fsp.readFile(filePath, 'utf8');
++    return raw
++      .split(/\r?\n/)
++      .map(line => line.trim())
++      .filter(Boolean)
++      .map(line => JSON.parse(line));
++  } catch (err) {
++    if (err && err.code === 'ENOENT') return [];
++    throw err;
++  }
++}
++
++async function writeNdjson(filePath, entries) {
++  await ensureDir(path.dirname(filePath));
++  if (!entries || entries.length === 0) {
++    await fsp.writeFile(filePath, '');
++    return;
++  }
++  const lines = entries.map(entry => JSON.stringify(entry));
++  await fsp.writeFile(filePath, lines.join('\n') + '\n');
++}
++
++function resequenceEvents(events, startSeq = 0) {
++  let seq = startSeq;
++  return events.map(event => ({ ...event, seq: ++seq }));
++}
++
++function nowIso() {
++  return new Date().toISOString();
++}
++
++async function sha256File(filePath) {
++  const buf = await fsp.readFile(filePath);
++  const hash = crypto.createHash('sha256');
++  hash.update(buf);
++  return hash.digest('hex');
++}
++
++async function sha256String(contents) {
++  const hash = crypto.createHash('sha256');
++  hash.update(contents);
++  return hash.digest('hex');
++}
++
++async function packageVersion() {
++  if (pkgVersion) return pkgVersion;
++  const pkg = await readJson(path.join(repoRoot, 'package.json'));
++  pkgVersion = pkg.version || '0.0.0';
++  return pkgVersion;
++}
++
++async function defaultEventContext(manifest) {
++  const composeSha = manifest.compose_sha256 || '0'.repeat(64);
++  const runId = manifest.run_id || manifest.task_id || 'headless';
++  const mode = manifest.events_mode || 'shipping';
++  return { run_id: runId, compose_sha256: composeSha, mode };
++}
++
++async function defaultEventSource() {
++  return { cli: 'tm-headless', version: await packageVersion() };
++}
++
++async function readLastSeq(filePath) {
++  try {
++    const raw = await fsp.readFile(filePath, 'utf8');
++    const lines = raw.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
++    if (!lines.length) return 0;
++    const last = JSON.parse(lines[lines.length - 1]);
++    return Number(last.seq) || 0;
++  } catch (err) {
++    if (err && err.code === 'ENOENT') return 0;
++    throw err;
++  }
++}
++
++function relativize(targetPath) {
++  return path.relative(repoRoot, targetPath) || path.basename(targetPath);
++}
++
++export {
++  ensureDir,
++  loadManifest,
++  saveManifest,
++  updateManifest,
++  eventsPath,
++  readNdjson,
++  writeNdjson,
++  resequenceEvents,
++  nowIso,
++  sha256File,
++  sha256String,
++  packageVersion,
++  defaultEventContext,
++  defaultEventSource,
++  readLastSeq,
++  relativize,
++  manifestPath
++};
+diff --git a/scripts/tests/codex-cloud-stub.mjs b/scripts/tests/codex-cloud-stub.mjs
+new file mode 100755
+index 0000000000000000000000000000000000000000..53d91e181075df2babbcdc29dc4c5f14456e3f89
+--- /dev/null
++++ b/scripts/tests/codex-cloud-stub.mjs
+@@ -0,0 +1,141 @@
++#!/usr/bin/env node
++import fsp from 'fs/promises';
++import path from 'path';
++import { fileURLToPath } from 'url';
++
++const __filename = fileURLToPath(import.meta.url);
++const __dirname = path.dirname(__filename);
++const dataRoot = path.resolve(__dirname, '../../examples/cloud-stub');
++const tasksPath = path.join(dataRoot, 'tasks.json');
++
++async function loadTasks() {
++  const raw = await fsp.readFile(tasksPath, 'utf8');
++  const data = JSON.parse(raw);
++  return data.tasks || {};
++}
++
++function pickTaskArg(params, tasks) {
++  const optionsWithValue = new Set(['--variant', '--dir', '--out', '--profile', '--weights']);
++  for (let i = 0; i < params.length; i += 1) {
++    const p = params[i];
++    if (p.startsWith('--') && optionsWithValue.has(p)) {
++      i += 1;
++      continue;
++    }
++    if (!p.startsWith('-')) return p;
++  }
++  const fallback = process.env.CODEX_STUB_TASK;
++  if (fallback) return fallback;
++  const taskIds = Object.keys(tasks || {});
++  return taskIds.length ? taskIds[0] : null;
++}
++
++function optionValue(params, flag) {
++  const idx = params.indexOf(flag);
++  if (idx === -1) return null;
++  return params[idx + 1] ?? null;
++}
++
++async function handleList(tasks, params) {
++  const out = Object.entries(tasks).map(([taskId, info]) => ({
++    task_id: taskId,
++    status: info.status || 'ready'
++  }));
++  if (params.includes('--json')) {
++    process.stdout.write(JSON.stringify(out));
++  } else {
++    out.forEach(entry => {
++      process.stdout.write(`${entry.task_id}\t${entry.status}\n`);
++    });
++  }
++}
++
++async function handleShow(tasks, params) {
++  const taskId = pickTaskArg(params, tasks);
++  const info = tasks[taskId] || null;
++  if (!info) {
++    throw new Error(`Task ${taskId} not found in stub data`);
++  }
++  const variants = (info.variants || []).map(v => ({
++    variant_index: v.variant_index,
++    status: v.status || info.status || 'ready'
++  }));
++  const payload = { task_id: taskId, variants };
++  process.stdout.write(JSON.stringify(payload));
++}
++
++async function copyRecursive(src, dest) {
++  await fsp.rm(dest, { recursive: true, force: true });
++  await fsp.mkdir(dest, { recursive: true });
++  await fsp.cp(src, dest, { recursive: true });
++}
++
++async function handleExport(tasks, params) {
++  const variantStr = optionValue(params, '--variant');
++  const dir = optionValue(params, '--dir');
++  const taskId = pickTaskArg(params, tasks);
++  if (!variantStr || !dir) {
++    throw new Error('codex stub export requires --variant <n> --dir <out>');
++  }
++  const variantIndex = Number(variantStr);
++  const info = tasks[taskId];
++  const variant = (info?.variants || []).find(v => Number(v.variant_index) === variantIndex);
++  if (!variant) throw new Error(`Variant ${variantIndex} not found for ${taskId}`);
++  const sourceDir = path.join(dataRoot, 'variants', String(variant.export || `var${variantIndex}`));
++  await copyRecursive(sourceDir, path.resolve(dir));
++}
++
++async function handleDiff(tasks, params) {
++  const variantStr = optionValue(params, '--variant');
++  const taskId = pickTaskArg(params, tasks);
++  if (!variantStr) throw new Error('codex stub diff requires --variant <n>');
++  const variantIndex = Number(variantStr);
++  const info = tasks[taskId];
++  const variant = (info?.variants || []).find(v => Number(v.variant_index) === variantIndex);
++  if (!variant) throw new Error(`Variant ${variantIndex} not found for ${taskId}`);
++  const sourceDir = path.join(dataRoot, 'variants', String(variant.export || `var${variantIndex}`));
++  const diffPath = path.join(sourceDir, 'diff.patch');
++  const diff = await fsp.readFile(diffPath, 'utf8');
++  process.stdout.write(diff);
++}
++
++async function handleApply(tasks, params) {
++  const variantStr = optionValue(params, '--variant');
++  const taskId = pickTaskArg(params, tasks);
++  if (!variantStr) throw new Error('codex stub apply requires --variant <n>');
++  process.stdout.write(`stub: applied task ${taskId} variant ${variantStr}\n`);
++}
++
++async function main() {
++  const args = process.argv.slice(2);
++  if (args[0] !== 'cloud') {
++    throw new Error('codex stub expects leading "cloud" command');
++  }
++  const command = args[1];
++  const params = args.slice(2);
++  const tasks = await loadTasks();
++  switch (command) {
++    case 'list':
++      await handleList(tasks, params);
++      break;
++    case 'show':
++      await handleShow(tasks, params);
++      break;
++    case 'export':
++      await handleExport(tasks, params);
++      break;
++    case 'diff':
++      await handleDiff(tasks, params);
++      break;
++    case 'apply':
++      await handleApply(tasks, params);
++      break;
++    default:
++      throw new Error(`Unsupported cloud command: ${command}`);
++  }
++}
++
++main().catch(err => {
++  console.error(err?.message || String(err));
++  process.exit(1);
++});

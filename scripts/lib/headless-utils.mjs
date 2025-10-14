@@ -9,6 +9,22 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 
 let pkgVersion = null;
 
+function splitCommand(command) {
+  if (Array.isArray(command)) return command;
+  if (typeof command !== 'string') return [String(command)];
+  const matches = command.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
+  return matches.map(token => token.replace(/^"(.*)"$/u, '$1'));
+}
+
+function resolveCommand(command) {
+  const parts = splitCommand(command);
+  if (parts.length === 0) {
+    return { command: String(command), args: [] };
+  }
+  const [cmd, ...args] = parts;
+  return { command: cmd, args };
+}
+
 async function ensureDir(dir) {
   await fsp.mkdir(dir, { recursive: true });
 }
@@ -159,5 +175,6 @@ export {
   defaultEventSource,
   readLastSeq,
   relativize,
-  manifestPath
+  manifestPath,
+  resolveCommand
 };

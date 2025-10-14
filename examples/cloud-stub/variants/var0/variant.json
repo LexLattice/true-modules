@@ -1,0 +1,11 @@
+{
+  "variant_index": 0,
+  "status": "completed",
+  "title": "Headless CI demo variant",
+  "summary": "Stub variant exported by codex-cloud-stub for headless CI",
+  "modules": [
+    "git.diff.core",
+    "git.index.controller",
+    "safety.validation"
+  ]
+}
