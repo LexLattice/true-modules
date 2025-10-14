@@ -2050,17 +2050,36 @@ function formatDuration(ms) {
 }
 
 function extractSkipReason(output) {
-  if (!output) return null;
-  const line = String(output)
+  if (!output) return { matched: false, reason: null };
+  const lines = String(output)
     .split(/\r?\n/)
     .map(entry => entry.trim())
-    .find(entry => entry.length);
-  if (!line) return null;
-  const testSkipped = /TEST_SKIPPED\s*(.*)$/i.exec(line);
-  if (testSkipped) return testSkipped[1] || null;
-  const skip = /^SKIP\s*(.*)$/i.exec(line);
-  if (skip) return skip[1] || null;
-  return line;
+    .filter(entry => entry.length);
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed && typeof parsed === 'object') {
+        const event = String(parsed.tm_event || parsed.event || '').toUpperCase();
+        if (event === 'TEST_SKIPPED' || event === 'SKIP') {
+          const reasonValue = typeof parsed.reason === 'string' ? parsed.reason.trim() : '';
+          return { matched: true, reason: reasonValue || null };
+        }
+      }
+    } catch {
+      // fall through to regex checks
+    }
+    const testSkipped = /^TEST_SKIPPED\s*(.*)$/i.exec(line);
+    if (testSkipped) {
+      const reasonValue = testSkipped[1]?.trim() || '';
+      return { matched: true, reason: reasonValue || null };
+    }
+    const skip = /^SKIP\s*(.*)$/i.exec(line);
+    if (skip) {
+      const reasonValue = skip[1]?.trim() || '';
+      return { matched: true, reason: reasonValue || null };
+    }
+  }
+  return { matched: false, reason: null };
 }
 
 program
@@ -2328,14 +2347,22 @@ program
                 recordSideEffectsObservation(sideEffectsAccumulator, m.id, evaluation.summary);
 
                 if (runResult.code === TEST_SKIP_EXIT_CODE) {
+                  const skipInfo = extractSkipReason(runResult.out || runResult.err);
+                  if (!skipInfo.matched) {
+                    const skipErr = tmError(
+                      'E_TEST',
+                      `Test ${t} exited with skip code ${TEST_SKIP_EXIT_CODE} but did not emit TEST_SKIPPED directive.`
+                    );
+                    skipErr.detail = { module: m.id, test: t, exit_code: runResult.code };
+                    throw skipErr;
+                  }
                   skippedTests += 1;
                   const dur = Date.now() - testStart;
-                  const reason = extractSkipReason(runResult.out || runResult.err);
                   await ee.emit('TEST_SKIPPED', {
                     module: m.id,
                     test: t,
                     dur_ms: dur,
-                    reason: reason || undefined,
+                    reason: skipInfo.reason || undefined,
                     side_effects: evaluation.summary
                   });
                   continue;

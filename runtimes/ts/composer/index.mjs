@@ -41,11 +41,15 @@ async function listDirEntries(root, prefix = '') {
       result.push({ type: 'dir', rel: relNormalized });
       const nested = await listDirEntries(abs, rel);
       result.push(...nested);
-    } else if (entry.isSymbolicLink && entry.isSymbolicLink()) {
+    } else if (entry.isSymbolicLink()) {
       let target = '';
       try {
         target = await fs.readlink(abs);
-      } catch {}
+      } catch (err) {
+        if (!err || err.code !== 'ENOENT') {
+          throw err;
+        }
+      }
       result.push({ type: 'symlink', rel: relNormalized, target });
     } else if (entry.isFile()) {
       result.push({ type: 'file', rel: relNormalized, abs });

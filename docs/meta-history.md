@@ -166,3 +166,29 @@ Records of tournament outcomes and review insights once a pull request wraps. Ea
   - Add negative fixtures exercising `E_ORACLE_NONDETERMINISM`/`E_SIDEEFFECTS_FORBIDDEN` in CI to keep coverage strong.
   - Explore extending the guard to observe non-Node subprocesses (e.g., Git hooks invoking shell scripts).
   - Consider caching validated oracle specs to avoid repeatedly compiling large Ajv schemas in long-running sessions.
+
+## E6–E7–E8 — Port Version Negotiation · SafetyPort Deep Suite · Performance & Caching
+- **Winner**: `task_e_68edadaef2ec8320ba60f77e1c726ae4` · var2
+- **Why it won**:
+  - Hardened provider analysis so mixed majors now raise `E_PORT_VERSION_AMBIG` unless wiring or `preferred_providers` selects a single major, and surfaced inactive majors in `tm compose --explain`.
+  - Made the TypeScript composer hash module/glue trees before copying and stash digests under `winner/.tm/copy-hashes.json`, avoiding redundant syncs on warm runs.
+  - Instrumented shipping gates with phase timing (`GATES_SUMMARY`), cached ESLint/tsc work in `.tm/`, and accepted explicit `TEST_SKIPPED` directives so platform-specific runners contribute telemetry without failing Linux/mac builds.
+  - Expanded the SafetyPort fixtures with TypeScript-powered runners that assert normalization/guard behaviour on both POSIX and Windows paths.
+- **Imports pulled in**:
+  - Reused the `.tm` cache pattern from earlier headless tooling work to persist ESLint/tsc artefacts between runs.
+- **Why other variants fell short**:
+  - `var1` mis-flagged negotiated majors and failed the warm-run tests once constraints were present.
+  - `var3` did not clear inactive providers, so `--explain` still reported conflicting majors and lint timing never landed in phase telemetry.
+  - `var4` relied on heuristic skip detection and left major negotiation in a half-active state, risking false positives in event consumers.
+- **Review feedback addressed**:
+  - Tightened skip handling so exit code `64` only counts when the runner emits a `TEST_SKIPPED` directive, preventing accidental passes on other failures.
+  - Simplified symlink detection in the composer hash walker and surfaced non-`ENOENT` readlink errors per Gemini feedback.
+- **Tradeoffs**:
+  - Hashing entire module trees adds CPU to the cold path; extremely large winners might still need a more incremental strategy.
+  - Cached lint/tsc artefacts live under `.tm/`; callers must remember to purge it when dependency graphs change.
+- **Open questions**:
+  - Should we surface port-major negotiation results in winner metadata for downstream auditing?
+  - Do we want CI to assert cached TypeScript phases beyond the current examples?
+- **Residual risks**:
+  - Hash-based copy detection assumes stable file content; generated artefacts with nondeterministic timestamps will still thrash the cache.
+  - Platform skip directives rely on runner discipline—missing JSON markers now fail the gate, but richer diagnostics may help authors debug quickly.
