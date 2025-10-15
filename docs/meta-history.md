@@ -217,3 +217,40 @@ Records of tournament outcomes and review insights once a pull request wraps. Ea
 - **Residual risks**:
   - MCP smoke relies on stdout/stderr heuristics; façade changes that alter startup logging could require test tweaks.
   - Python wrapper error envelopes now mirror tm codes, but downstream tooling must still handle non-zero exit statuses correctly.
+
+## F3–F4 — `tm doctor` · `tm init` · Winner Publish (npm-pack)
+- **Winner**: `var1`
+- **Why it won**:
+  - Extended `tm doctor` with `--artifacts`, persisted `doctor.json`, and downgraded `doctor_artifact` to warnings when writes fail so diagnostics survive read-only hosts.【../.codex-cloud/variants/task_e_68ede47fd8b08320870000d6d9e96fd7/var1/var1/patch.diff:1444-1620】
+  - Introduced `tm init` with base/TypeScript/MCP template layers that scaffold modules, docs, CI, and README guidance from a single command.【../.codex-cloud/variants/task_e_68ede47fd8b08320870000d6d9e96fd7/var1/var1/patch.diff:600-714】【../.codex-cloud/variants/task_e_68ede47fd8b08320870000d6d9e96fd7/var1/var1/patch.diff:1710-1754】
+  - Wired `--npm-pack` into shipping gates, copying tarballs/logs into `artifacts/` and surfacing failures as `E_NPM_PACK` with actionable diagnostics.【../.codex-cloud/variants/task_e_68ede47fd8b08320870000d6d9e96fd7/var1/var1/patch.diff:1783-1844】
+  - Refreshed contributor/composer docs so operators run `tm doctor --artifacts …` and review packaging smoke outputs by default.【../.codex-cloud/variants/task_e_68ede47fd8b08320870000d6d9e96fd7/var1/var1/patch.diff:33-197】
+- **Imports pulled in**:
+  - None.
+- **Why other variants fell short**:
+  - No alternate variants completed the brief for this task cycle, so there were no additional changes to import.
+- **Review feedback addressed**:
+  - Hardened lessons mining/doctor writes with structured error codes and captured the implementation snapshot in `docs/report.json` for posterity.【../.codex-cloud/variants/task_e_68ede47fd8b08320870000d6d9e96fd7/var1/var1/patch.diff:1432-1440】【../.codex-cloud/variants/task_e_68ede47fd8b08320870000d6d9e96fd7/var1/var1/patch.diff:285-340】
+- **Tradeoffs**: Doctor now touches disk on every run; read-only environments emit warnings that developers must review.
+- **Residual risks**: CI still treats doctor as non-blocking, so artifact warnings depend on human follow-up.【../.codex-cloud/variants/task_e_68ede47fd8b08320870000d6d9e96fd7/var1/var1/patch.diff:370-399】
+- **Follow-ups / TODOs**:
+  - Add regression coverage for `doctor_artifact` warnings so future refactors keep the edge case tested.【../.codex-cloud/variants/task_e_68ede47fd8b08320870000d6d9e96fd7/var1/var1/patch.diff:456-463】
+
+## F5–F6 — Events Summary/Viz · Auto Lessons Hook
+- **Winner**: `var1`
+- **Why it won**:
+  - Shipped `scripts/events-summarize.mjs`, which turns gate NDJSON into deterministic JSON/Markdown dashboards and prints a TTY table for quick log review.【../.codex-cloud/variants/task_e_68ef1460aa0c8320b4b250ab4f51d361/var1/var1/patch.diff:294-412】
+  - Added `tm events summary` so both CI and humans can generate the same artifacts with a single flag set.【../.codex-cloud/variants/task_e_68ef1460aa0c8320b4b250ab4f51d361/var1/var1/patch.diff:814-838】
+  - Delivered `scripts/lessons-auto.sh` (with an optional `--commit` path) and a main-branch workflow that reruns shipping gates, creates summaries, mines lessons, and uploads everything in one run.【../.codex-cloud/variants/task_e_68ef1460aa0c8320b4b250ab4f51d361/var1/var1/patch.diff:6-61】【../.codex-cloud/variants/task_e_68ef1460aa0c8320b4b250ab4f51d361/var1/var1/patch.diff:653-739】
+  - Updated `docs/events.md`, `docs/lessons.md`, and `docs/report.json` to explain how to consume the new artifacts and feed `lessons.json` into future prompts.【../.codex-cloud/variants/task_e_68ef1460aa0c8320b4b250ab4f51d361/var1/var1/patch.diff:63-152】【../.codex-cloud/variants/task_e_68ef1460aa0c8320b4b250ab4f51d361/var1/var1/patch.diff:129-193】
+- **Imports pulled in**:
+  - None.
+- **Why other variants fell short**:
+  - `var2` and `var3` only supported artifact uploads (no commit mode), and `var3` even ignored `lessons.json` via `.gitignore`, blocking the follow-up prompt seeding workflow.【../.codex-cloud/variants/task_e_68ef1460aa0c8320b4b250ab4f51d361/var2/var2/patch.diff:767-780】【../.codex-cloud/variants/task_e_68ef1460aa0c8320b4b250ab4f51d361/var3/var3/patch.diff:122-139】【../.codex-cloud/variants/task_e_68ef1460aa0c8320b4b250ab4f51d361/var3/var3/patch.diff:728-751】
+  - `var4` required a trailing `GATES_SUMMARY` event and aborted otherwise, making the summarizer fragile for partial streams.【../.codex-cloud/variants/task_e_68ef1460aa0c8320b4b250ab4f51d361/var4/var4/patch.diff:417-434】
+- **Review feedback addressed**:
+  - Added structured `E_SUMMARY_PARSE` handling and recorded the automation snapshot in reporting docs.【../.codex-cloud/variants/task_e_68ef1460aa0c8320b4b250ab4f51d361/var1/var1/patch.diff:599-709】【../.codex-cloud/variants/task_e_68ef1460aa0c8320b4b250ab4f51d361/var1/var1/patch.diff:287-340】
+- **Tradeoffs**: The lessons workflow reruns shipping gates on `main`, increasing CI minutes but guaranteeing fresh telemetry.
+- **Residual risks**: If gates fail upstream, the workflow skips uploads, so reviewers must still monitor artifacts for completeness.
+- **Follow-ups / TODOs**:
+  - Enable the commit path once bot credentials exist so mined lessons land automatically when appropriate.【../.codex-cloud/variants/task_e_68ef1460aa0c8320b4b250ab4f51d361/var1/var1/patch.diff:739-740】

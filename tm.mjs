@@ -3275,9 +3275,9 @@ eventsCmd
   .description('Aggregate durations, failure codes, and module outcomes from events')
   .action(async (opts) => {
     const inputPath = path.resolve(opts.in);
-    const jsonOut = path.resolve(opts.json || path.join('artifacts', 'summary.json'));
-    const markdownOut = path.resolve(opts.md || path.join('artifacts', 'summary.md'));
-    const topRaw = opts.top ?? '5';
+    const jsonOut = path.resolve(opts.json);
+    const markdownOut = path.resolve(opts.md);
+    const topRaw = typeof opts.top === 'string' ? opts.top : '5';
     const topTests = Number.parseInt(topRaw, 10);
     if (!Number.isFinite(topTests) || topTests < 0) {
       console.error('--top must be a non-negative integer');

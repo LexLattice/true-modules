@@ -158,6 +158,12 @@ export async function summarizeEvents({ inputPath, jsonOut = DEFAULT_JSON, markd
     return { summary, markdown };
   }
 
+  const stageDurationKeys = {
+    LINT: 'lint_ms',
+    TEST: 'test_ms',
+    TSC: 'tsc_ms',
+    PORT_CHECK: 'port_check_ms'
+  };
   const stageDurations = {
     lint_ms: 0,
     test_ms: 0,
@@ -201,8 +207,8 @@ export async function summarizeEvents({ inputPath, jsonOut = DEFAULT_JSON, markd
             dur = roundDuration(ended - started);
           }
         }
+        const moduleId = detail.module || 'unknown';
         if (stage === 'TEST') {
-          const moduleId = detail.module || 'unknown';
           const testId = detail.test || 'unknown';
           const status = phase === 'PASS' ? 'pass' : 'fail';
           if (dur != null) {
@@ -211,15 +217,9 @@ export async function summarizeEvents({ inputPath, jsonOut = DEFAULT_JSON, markd
             testRuns.push({ module: moduleId, test: testId, dur_ms: null, status });
           }
           testStarts.delete(key);
-          const stats = moduleStats.get(moduleId) || { module: moduleId, passed: 0, failed: 0 };
-          if (phase === 'PASS') {
-            stats.passed += 1;
-          } else {
-            stats.failed += 1;
-          }
-          moduleStats.set(moduleId, stats);
-        } else if (stage === 'PORT_CHECK') {
-          const moduleId = detail.module || 'unknown';
+        }
+
+        if (stage === 'TEST' || stage === 'PORT_CHECK') {
           const stats = moduleStats.get(moduleId) || { module: moduleId, passed: 0, failed: 0 };
           if (phase === 'PASS') {
             stats.passed += 1;
@@ -230,11 +230,10 @@ export async function summarizeEvents({ inputPath, jsonOut = DEFAULT_JSON, markd
         }
 
         if (dur != null) {
-          if (stage === 'LINT') stageDurations.lint_ms += dur;
-          else if (stage === 'TEST') stageDurations.test_ms += dur;
-          else if (stage === 'TSC') stageDurations.tsc_ms += dur;
-          else if (stage === 'PORT_CHECK') stageDurations.port_check_ms += dur;
-          else stageDurations.other_ms += dur;
+          const key = stageDurationKeys[stage];
+          if (key) {
+            stageDurations[key] += dur;
+          }
         }
 
         if (phase === 'FAIL') {
@@ -309,15 +308,31 @@ async function main() {
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === '--in') {
+      if (!args[i + 1]) {
+        console.error('--in expects a file path');
+        process.exit(1);
+      }
       input = args[i + 1];
       i += 1;
     } else if (arg === '--json') {
+      if (!args[i + 1]) {
+        console.error('--json expects a file path');
+        process.exit(1);
+      }
       jsonOut = path.resolve(args[i + 1]);
       i += 1;
     } else if (arg === '--md') {
+      if (!args[i + 1]) {
+        console.error('--md expects a file path');
+        process.exit(1);
+      }
       markdownOut = path.resolve(args[i + 1]);
       i += 1;
     } else if (arg === '--top') {
+      if (!args[i + 1]) {
+        console.error('--top expects a numeric value');
+        process.exit(1);
+      }
       const value = Number(args[i + 1]);
       if (!Number.isFinite(value) || value < 0) {
         console.error('--top expects a non-negative number');
@@ -325,6 +340,9 @@ async function main() {
       }
       topTests = Math.floor(value);
       i += 1;
+    } else {
+      console.error(`Unknown argument: ${arg}`);
+      process.exit(1);
     }
   }
 
