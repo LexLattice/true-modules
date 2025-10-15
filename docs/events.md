@@ -115,3 +115,39 @@ node tm.mjs events replay --in artifacts/events.ndjson --out artifacts/timeline.
 The replay output is ideal for CI artifacts and quick run diagnostics. Apply the
 same commands to `artifacts/meta.events.ndjson` to review the `META_PICK`
 timeline captured during composition.
+
+## How to read the summary
+
+`tm events summary --in artifacts/events.ndjson` computes aggregated metrics and
+persists them to `artifacts/summary.json` and `artifacts/summary.md`. The CLI
+also prints a compact TTY table so you can skim the highlights directly from
+logs. Metrics include:
+
+- **Gate durations** – total elapsed time along with lint, test, TypeScript, and
+  port-check subtotals derived from the event stream.
+- **Failure codes** – a histogram of `*_FAIL` codes for quick triage.
+- **Slowest tests** – the top offenders by `dur_ms`, useful for spotting noisy
+  regression suites.
+- **Module results** – pass/fail counts per module covering tests and port
+  checks.
+
+Example output:
+
+```text
+# Gate Summary
+## Gate durations
+
++-------------+---------------+
+| Stage       | Duration (ms) |
++-------------+---------------+
+| Total       | 3,276         |
+| Lint        | 775           |
+| Tests       | 1,371         |
+| TypeScript  | 999           |
+| Port checks | 0             |
+| Other       | 0             |
++-------------+---------------+
+```
+
+CI workflows can upload `summary.md`, `summary.json`, and `events.ndjson` as
+artifacts so anyone on the team can drill into the run without rerunning gates.

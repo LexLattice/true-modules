@@ -1,91 +1,72 @@
 {
-  "summary": "Extended tm doctor with an --artifacts flag that persists doctor.json, refreshed contributor docs/templates to call the flag, and updated CI to rely on the CLI-managed artifact.",
+  "summary": "Added an events summary command that materializes JSON/markdown dashboards and wired a main-branch workflow to mine lessons automatically.",
   "checklist": [
     {
       "id": "P1",
       "status": "implemented",
-      "notes": "Added CLI-managed artifact handling for doctor runs and aligned docs plus CI with the new workflow."
+      "notes": "Introduced tm events summary plus automation to publish summary artifacts and lessons.json."
     }
   ],
   "architecture": {
     "components_added": [],
-    "components_modified": [
-      {
-        "path": "tm.mjs",
-        "reason": "Persist doctor results via --artifacts and surface write failures as doctor_artifact warnings."
-      },
-      {
-        "path": ".github/workflows/ci.yml",
-        "reason": "Invoke tm doctor with --artifacts so CI captures artifacts/doctor.json without shell redirection."
-      },
-      {
-        "path": "docs/contributor-playbook.md",
-        "reason": "Document how to run tm doctor with --artifacts and locate artifacts/doctor.json."
-      },
-      {
-        "path": "templates/init/base/README.md",
-        "reason": "Guide new workspaces to run tm doctor with --artifacts and retain the emitted JSON."
-      },
-      {
-        "path": "docs/implementation-briefs.md",
-        "reason": "Note the artifact emission contract for tm doctor in the feature brief."
-      }
-    ],
-    "data_flow": "tm doctor now ensures the requested --artifacts directory exists, writes doctor.json beside the CLI JSON stream, and records doctor_artifact status in the payload for CI and local use.",
-    "state_management": "Doctor diagnostics persist in artifacts/doctor.json by default; failed writes downgrade the doctor_artifact check to warn so operators can react.",
+    "components_modified": [],
+    "data_flow": "tm events summary reads NDJSON telemetry, writes deterministic artifacts/summary.* files, and the lessons workflow reruns gates before mining lessons.json for downstream prompts.",
+    "state_management": "Event aggregates persist as summary.json/summary.md while lessons-auto.sh rewrites lessons.json in the repo root; no long-lived in-memory state added.",
     "invariants": [
-      "tm doctor must attempt to save doctor.json under the selected artifacts directory on every run.",
-      "doctor_artifact moves to warn when the JSON payload cannot be written to disk."
+      "events summary always writes artifacts/summary.json and artifacts/summary.md for the provided NDJSON",
+      "lessons-auto.sh exits cleanly when no lesson changes are detected"
     ],
     "tradeoffs": [
-      "Embedding artifact writes in tm doctor centralizes ownership but requires filesystem access during diagnostics."
+      "Re-running shipping gates in lessons.yml increases CI time but guarantees fresh events for summaries."
     ],
     "alternatives_considered": [
       {
-        "option": "Keep artifact creation in CI shell scripts",
-        "rejected_because": "Would leave contributors and automation to maintain separate redirection logic, increasing drift."
+        "option": "Reuse artifacts from the ci workflow",
+        "rejected_because": "Cross-workflow artifact sharing would require extra API plumbing and secrets."
       }
     ],
-    "open_questions": []
+    "open_questions": [
+      "Should we enable commit mode in lessons-auto.sh once the bot account is ready?"
+    ]
   },
   "tests": {
     "added": [],
-    "how_to_run": "npm run schema:compile"
+    "how_to_run": "node tm.mjs events summary --in runs/2025-10-13-demo-headless/artifacts/events.ndjson --top 3"
   },
   "metrics": {
     "files_changed": 6,
-    "insertions": 97,
-    "deletions": 71
+    "insertions": 568,
+    "deletions": 0
   },
   "decisions": [
     {
-      "option": "Have tm doctor manage artifacts/doctor.json via --artifacts",
-      "rationale": "Keeps local runs, templates, and CI aligned on where the diagnostics live without extra scripting.",
+      "option": "Publish lessons.json as an artifact instead of committing",
+      "rationale": "Keeps the workflow read-only until automated commit credentials are provisioned.",
       "rejected_alternatives": [
         {
-          "variant": "Rely on stdout redirection per environment",
-          "reason": "Divergent shell recipes would be harder to document and easy to forget outside CI.",
-          "confidence": 0.5
+          "variant": "Auto-commit lessons.json on every main push",
+          "reason": "Requires git credentials in CI and could create merge churn without governance.",
+          "confidence": 0.6
         }
       ]
     }
   ],
   "risks": [
-    "Read-only workspaces will still warn when doctor.json cannot be written."
+    "Gates execution inside lessons.yml could fail, blocking artifact publication."
   ],
   "residual_risks": [
-    "CI keeps the doctor step non-blocking, so artifact warnings depend on human follow-up."
+    "If gates flake the workflow will not upload fresh summaries despite existing lessons data."
   ],
   "followups": [
     {
-      "title": "Add regression coverage for doctor_artifact warnings",
+      "title": "Enable commit mode once bot credentials exist",
       "priority": "P2",
-      "owner": "tooling",
-      "pointer": "tm.mjs#L1842"
+      "owner": "platform",
+      "pointer": "scripts/lessons-auto.sh#L1"
     }
   ],
   "todos": [
-    "Hook doctor.json into local automation that uploads artifacts for reviewers."
+    "Add unit coverage for summarizeEvents to guard against schema changes."
   ],
-  "confidence": 0.7
+  "confidence": 0.6
 }
