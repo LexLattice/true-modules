@@ -13,6 +13,7 @@ import { tmError, analyzeProviders } from './scripts/lib/provider-analysis.mjs';
 import { evaluateSideEffects } from './scripts/lib/side-effects.mjs';
 import { validateEventsFile } from './scripts/events-validate.mjs';
 import { replayEvents } from './scripts/events-replay.mjs';
+import { summarizeEvents } from './scripts/events-summarize.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -3257,6 +3258,41 @@ eventsCmd
       console.error(`timeline written to ${path.relative(process.cwd(), result.timelinePath) || result.timelinePath}`);
     } catch (err) {
       if (err?.code === 'E_EVENT_SCHEMA') {
+        console.error(err.message);
+        process.exitCode = 1;
+        return;
+      }
+      throw err;
+    }
+  });
+
+eventsCmd
+  .command('summary')
+  .requiredOption('--in <file>', 'Input events NDJSON file')
+  .option('--json <file>', 'Summary JSON output file', path.join('artifacts', 'summary.json'))
+  .option('--md <file>', 'Summary markdown output file', path.join('artifacts', 'summary.md'))
+  .option('--top <n>', 'Number of slowest tests to include', '5')
+  .description('Aggregate durations, failure codes, and module outcomes from events')
+  .action(async (opts) => {
+    const inputPath = path.resolve(opts.in);
+    const jsonOut = path.resolve(opts.json);
+    const markdownOut = path.resolve(opts.md);
+    const topRaw = typeof opts.top === 'string' ? opts.top : '5';
+    const topTests = Number.parseInt(topRaw, 10);
+    if (!Number.isFinite(topTests) || topTests < 0) {
+      console.error('--top must be a non-negative integer');
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const result = await summarizeEvents({ inputPath, jsonOut, markdownOut, topTests });
+      const output = result.markdown.endsWith('\n') ? result.markdown : `${result.markdown}\n`;
+      process.stdout.write(output);
+      const relJson = path.relative(process.cwd(), jsonOut) || jsonOut;
+      const relMarkdown = path.relative(process.cwd(), markdownOut) || markdownOut;
+      console.error(`summary written to ${relJson} & ${relMarkdown}`);
+    } catch (err) {
+      if (err?.code === 'E_EVENT_SCHEMA' || err?.code === 'E_SUMMARY_PARSE') {
         console.error(err.message);
         process.exitCode = 1;
         return;

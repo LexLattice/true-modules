@@ -1,0 +1,55 @@
+name: lessons
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  mine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache Node dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate gate events summary
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          node tm.mjs gates shipping \
+            --compose examples/compose.greedy.json \
+            --modules-root examples/modules \
+            --overrides examples/compose.overrides/overrides.json \
+            --emit-events \
+            --events-out artifacts/events.ndjson \
+            --strict-events
+          node tm.mjs events summary --in artifacts/events.ndjson
+
+      - name: Mine lessons
+        run: ./scripts/lessons-auto.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lessons-summary
+          path: |
+            artifacts/events.ndjson
+            artifacts/summary.json
+            artifacts/summary.md
+            lessons.json

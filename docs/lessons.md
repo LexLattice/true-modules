@@ -5,6 +5,11 @@ postmortem reports into a durable JSON artifact. Use it to surface the highest
 priority cleanup items after every run and to backfill `docs/meta-history.md`
 with links to notable incidents.
 
+Before drafting the next automation prompt, skim the latest `lessons.json` and
+seed the brief with any open follow-ups. Replaying how past regressions were
+resolved keeps the next iteration focused on high-signal fixes instead of
+rediscovering the same pitfalls.
+
 ## Command
 
 Run the miner with one or more glob patterns and an output file:
