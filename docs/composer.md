@@ -43,12 +43,15 @@ node tm.mjs gates shipping --compose examples/compose.greedy.json \
 - The TypeScript composer now writes `winner/package.json` using the compose
   `run_id` to derive a unique name and pre-release version.
 - When `--npm-pack` is set, the gates invoke `npm pack` inside the winner
-  workspace, capture the emitted tarball name, and immediately delete the
-  archive so it does not pollute the working tree.
+  workspace, copy the tarball to `artifacts/winner.tgz`, and remove the
+  temporary archive so the workspace stays clean.
+- Every run appends to `artifacts/npm-pack.log`; use the log to debug skips,
+  failures, and the generated tarball metadata.
 - If `npm` is unavailable on the host, gates emit a warning and mark the smoke
   check as skipped instead of failing the run.
-- Failures bubble up as `GATES_FAIL` events with `error: "npm_pack_failed"` and
-  the first few diagnostics from `npm`.
+- Failures bubble up as `GATES_FAIL` events with `error: "E_NPM_PACK"`, a
+  pointer to `artifacts/npm-pack.log`, and the first few diagnostics from `npm`
+  (parse errors surface as `cause: "E_SUMMARY_PARSE"`).
 
 ## Resolving conflicts
 

@@ -7,6 +7,7 @@ A checklist-driven loop for adding or evolving True Modules content. Pair this g
 - [Specs & history](./meta-history.md), [ports conformance](./ports-conformance.md), [shipping tests](./tests.md)
 - MCP smoke payloads plus troubleshooting: [docs/mcp.md](./mcp.md)
 - Implementer prompt checklist: [../prompts/implementer/CHECKLIST.md](../prompts/implementer/CHECKLIST.md)
+- Environment baseline: `node tm.mjs doctor --json --artifacts artifacts` (capture warnings and stash `artifacts/doctor.json` before opening a PR)
 
 ---
 
@@ -20,7 +21,8 @@ A checklist-driven loop for adding or evolving True Modules content. Pair this g
 
 ## Phase 2 — Implement
 
-- [ ] Scaffold new modules with `node tm.mjs module --new <id>` or extend existing ones under `modules/`.
+- [ ] Scaffold new workspaces with `node tm.mjs init` (add `--ts` or `--mcp` when you need TypeScript or façade stubs).
+- [ ] Create new modules with `node tm.mjs module --new <id>` or extend existing ones under `modules/`.
 - [ ] Define ports, invariants, tests, and evidence in `module.json`. Cross-check [docs/ports-conformance.md](./ports-conformance.md) for naming, exports, and glue rules.
 - [ ] Keep code changes within module boundaries—no cross-module imports. Shared glue belongs under `glue/` or the catalog.
 - [ ] Capture evidence as you go (test specs, manual validation notes). Store artifacts alongside the module or under `docs/`.
@@ -29,7 +31,7 @@ A checklist-driven loop for adding or evolving True Modules content. Pair this g
 ## Phase 3 — Validate
 
 - [ ] Compose the plan: `node tm.mjs compose --compose <plan> --modules-root <dir> --out <winner>` (add `--overrides <file>` if applicable). Confirm the generated `winner/report.json` matches your expectations.
-- [ ] Run shipping gates locally: `node tm.mjs gates shipping --compose <plan> --modules-root <dir> --emit-events --events-out artifacts/events.ndjson --strict-events`. Include `--overrides` when replaying override scenarios.
+- [ ] Run shipping gates locally: `node tm.mjs gates shipping --compose <plan> --modules-root <dir> --emit-events --events-out artifacts/events.ndjson --strict-events`. Add `--npm-pack` to capture a smoke tarball once the winner workspace builds.
 - [ ] Inspect emitted events (`artifacts/events.ndjson`). Expect `GATES_PASS`, `TEST_PASS`, `EVIDENCE_LINKED`; investigate any failure codes before continuing.
 - [ ] Archive key artifacts (winner report, events file, manual evidence) for reviewers.
 - [ ] Update `docs/report.json` (or module docs) with new evidence, risks, and follow-ups. Note the exact commands you ran.

@@ -1,0 +1,30 @@
+{
+  "id": "demo.hello",
+  "version": "0.1.0",
+  "summary": "Echo a friendly greeting.",
+  "provides": ["HelloPort@1"],
+  "requires": [],
+  "inputs": {
+    "name": {
+      "schema": { "type": "string" },
+      "summary": "Name to greet"
+    }
+  },
+  "outputs": {
+    "greeting": {
+      "schema": { "type": "string" },
+      "summary": "Greeting response"
+    }
+  },
+  "side_effects": [],
+  "invariants": ["deterministic(outputs | inputs)"],
+  "tests": ["tests/spec_smoke.json"],
+  "evidence": [
+    {
+      "kind": "file",
+      "file": "src/index.ts",
+      "lines": "1-20",
+      "note": "Sample greet implementation"
+    }
+  ]
+}
