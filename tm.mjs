@@ -62,6 +62,43 @@ const cloneJson = (value) => {
 
 const wiringKey = (segment) => `${segment.from}->${segment.to}`;
 
+function parseSemver(version) {
+  if (typeof version !== 'string') return { major: 0, minor: 0, patch: 0 };
+  const match = version.trim().match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+  if (!match) return { major: 0, minor: 0, patch: 0 };
+  const [, major, minor, patch] = match;
+  return {
+    major: Number(major) || 0,
+    minor: Number(minor) || 0,
+    patch: Number(patch) || 0
+  };
+}
+
+function compareSemver(a, b) {
+  if (a.major !== b.major) return a.major - b.major;
+  if (a.minor !== b.minor) return a.minor - b.minor;
+  return a.patch - b.patch;
+}
+
+function runCommandCapture(command, args = [], options = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { shell: false, ...options });
+    let stdout = '';
+    let stderr = '';
+    let failed = false;
+    child.stdout?.on('data', (d) => { stdout += d; });
+    child.stderr?.on('data', (d) => { stderr += d; });
+    child.on('error', (err) => {
+      failed = true;
+      resolve({ ok: false, error: err, stdout, stderr, code: err?.code });
+    });
+    child.on('exit', (code) => {
+      if (failed) return;
+      resolve({ ok: code === 0, code, stdout, stderr });
+    });
+  });
+}
+
 function ensureOverrideEntry(section, value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw tmError('E_COMPOSE_OVERRIDES', `Overrides for ${section} must be objects.`);
@@ -820,7 +857,7 @@ async function listTarballs(dir) {
     return entries.filter(name => name.endsWith('.tgz')).sort();
   } catch (err) {
     if (err && err.code === 'ENOENT') {
-      throw tmError('npm_pack_failed', `Winner directory not found: ${path.relative(process.cwd(), dir) || dir}`);
+      throw tmError('E_NPM_PACK', `Winner directory not found: ${path.relative(process.cwd(), dir) || dir}`);
     }
     throw err;
   }
@@ -839,9 +876,72 @@ function collectPackDiagnostics(stdout, stderr, fallback) {
   return lines.filter(Boolean).slice(0, 5);
 }
 
+function parsePackSummary(stdout) {
+  const text = String(stdout || '').trim();
+  if (text) {
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) {
+        if (parsed.length > 0 && parsed[0] && typeof parsed[0] === 'object') return parsed[0];
+      } else if (parsed && typeof parsed === 'object') {
+        return parsed;
+      }
+    } catch {
+      // fall through to line-wise parsing
+    }
+  }
+
+  const lines = text.split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean);
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line);
+      if (Array.isArray(parsed)) {
+        if (parsed.length > 0 && parsed[0] && typeof parsed[0] === 'object') return parsed[0];
+        continue;
+      }
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch {
+      continue;
+    }
+  }
+  const failure = tmError('E_SUMMARY_PARSE', 'npm pack --json output could not be parsed.');
+  if (lines.length) {
+    failure.detail = { sample: lines.slice(0, 3) };
+  }
+  throw failure;
+}
+
+async function appendPackLog(logPath, { header, stdout, stderr, notes = [] }) {
+  const stamp = new Date().toISOString();
+  const parts = [`# ${stamp} ${header || ''}`.trim()];
+  for (const note of notes) {
+    if (note && note.trim()) parts.push(`- ${note.trim()}`);
+  }
+  const trimmedStdout = stdout && stdout.trim();
+  const trimmedStderr = stderr && stderr.trim();
+  if (trimmedStdout) {
+    parts.push('stdout:');
+    parts.push(trimmedStdout);
+  }
+  if (trimmedStderr) {
+    parts.push('stderr:');
+    parts.push(trimmedStderr);
+  }
+  parts.push('');
+  await ensureDir(path.dirname(logPath));
+  await fs.appendFile(logPath, parts.join('\n') + '\n');
+}
+
 async function execNpmPack(winnerDir) {
   return new Promise((resolve, reject) => {
-    const child = spawn('npm', ['pack'], { cwd: winnerDir, shell: false });
+    const { cmd, args } = npmInvocation();
+    const env = { ...process.env };
+    delete env.npm_config_http_proxy;
+    delete env.npm_config_https_proxy;
+    delete env.npm_config_proxy;
+    const child = spawn(cmd, [...args, '--json'], { cwd: winnerDir, shell: false, env });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', d => { stdout += d; });
@@ -857,12 +957,20 @@ async function execNpmPack(winnerDir) {
     });
     child.on('exit', code => {
       if (code === 0) {
-        resolve({ stdout, stderr });
+        try {
+          const summary = parsePackSummary(stdout);
+          resolve({ stdout, stderr, summary });
+        } catch (err) {
+          err.stdout = stdout;
+          err.stderr = stderr;
+          reject(err);
+        }
       } else {
         const error = new Error(`npm pack exited with code ${code}`);
         error.stdout = stdout;
         error.stderr = stderr;
         error.exitCode = code;
+        error.code = 'E_NPM_PACK';
         reject(error);
       }
     });
@@ -873,14 +981,21 @@ async function runNpmPackSmoke(winnerDir, ee) {
   const relDir = path.relative(process.cwd(), winnerDir) || '.';
   await ee.emit('NPM_PACK_START', { cwd: relDir });
   const start = Date.now();
+  const artifactsDir = path.resolve(process.cwd(), 'artifacts');
+  await ensureDir(artifactsDir);
+  const logPath = path.join(artifactsDir, 'npm-pack.log');
+  const logRel = path.relative(process.cwd(), logPath) || logPath;
+
   let before;
   try {
     before = new Set(await listTarballs(winnerDir));
   } catch (err) {
-    if (err && err.code === 'npm_pack_failed') {
+    if (err?.code === 'E_NPM_PACK') {
+      await appendPackLog(logPath, { header: 'preflight failure', notes: [`workspace: ${relDir}`], stderr: err.message });
       const diagnostics = collectPackDiagnostics(null, null, err.message);
       err.diagnostics = diagnostics;
-      await ee.emit('NPM_PACK_FAIL', { cwd: relDir, code: 'npm_pack_failed', diagnostics, dur_ms: Date.now() - start });
+      err.logPath = logRel;
+      await ee.emit('NPM_PACK_FAIL', { cwd: relDir, code: 'E_NPM_PACK', diagnostics, log: logRel, dur_ms: Date.now() - start });
     }
     throw err;
   }
@@ -889,31 +1004,85 @@ async function runNpmPackSmoke(winnerDir, ee) {
   try {
     const result = await execNpmPack(winnerDir);
     if (result?.skipped) {
-      await ee.emit('NPM_PACK_SKIP', { cwd: relDir, reason: result.reason, dur_ms: Date.now() - start });
+      await appendPackLog(logPath, { header: 'npm pack skipped', notes: [`workspace: ${relDir}`, `reason: ${result.reason}`] });
+      await ee.emit('NPM_PACK_SKIP', { cwd: relDir, reason: result.reason, dur_ms: Date.now() - start, log: logRel });
       ee.info(`ℹ️ npm pack skipped: ${result.reason}`);
-      return { skipped: true, reason: result.reason };
+      return { skipped: true, reason: result.reason, logPath: logRel };
     }
+
     const after = await listTarballs(winnerDir);
     for (const name of after) {
       if (!before.has(name)) produced.add(name);
     }
-    if (produced.size === 0) {
+    let tarballName = result?.summary?.filename || null;
+    if (!tarballName && produced.size > 0) {
+      tarballName = [...produced][0];
+    }
+    if (!tarballName) {
       const diagnostics = collectPackDiagnostics(result?.stdout, result?.stderr, 'npm pack produced no tarball');
-      const failure = tmError('npm_pack_failed', diagnostics[0] || 'npm pack produced no tarball');
+      const failure = tmError('E_NPM_PACK', diagnostics[0] || 'npm pack produced no tarball');
       failure.diagnostics = diagnostics;
-      await ee.emit('NPM_PACK_FAIL', { cwd: relDir, code: 'npm_pack_failed', diagnostics, dur_ms: Date.now() - start });
+      failure.logPath = logRel;
+      await appendPackLog(logPath, { header: 'npm pack failure', notes: [`workspace: ${relDir}`], stdout: result?.stdout, stderr: result?.stderr });
+      await ee.emit('NPM_PACK_FAIL', { cwd: relDir, code: 'E_NPM_PACK', diagnostics, log: logRel, dur_ms: Date.now() - start });
       throw failure;
     }
-    const tarballName = [...produced][0];
-    await ee.emit('NPM_PACK_PASS', { cwd: relDir, tarball: tarballName, dur_ms: Date.now() - start });
+
+    const artifactPath = path.join(artifactsDir, 'winner.tgz');
+    await fs.rm(artifactPath, { force: true }).catch(() => {});
+    const tarballPath = path.join(winnerDir, tarballName);
+    await fs.copyFile(tarballPath, artifactPath);
+    if (!before.has(tarballName)) {
+      await fs.rm(tarballPath, { force: true }).catch(() => {});
+    }
+
+    await appendPackLog(logPath, {
+      header: 'npm pack success',
+      notes: [`workspace: ${relDir}`, `tarball: ${tarballName}`],
+      stdout: result?.stdout,
+      stderr: result?.stderr
+    });
+
+    await ee.emit('NPM_PACK_PASS', {
+      cwd: relDir,
+      tarball: tarballName,
+      artifact: path.relative(process.cwd(), artifactPath) || artifactPath,
+      dur_ms: Date.now() - start,
+      log: logRel
+    });
     ee.info(`✓ npm pack smoke passed (${tarballName})`);
-    return { tarball: tarballName, workspace: relDir };
+    return {
+      tarball: tarballName,
+      workspace: relDir,
+      artifact: path.relative(process.cwd(), artifactPath) || artifactPath,
+      logPath: logRel
+    };
   } catch (err) {
-    if (err && err.code === 'npm_pack_failed') throw err;
+    if (err?.code === 'E_NPM_PACK' && err.logPath) throw err;
     const diagnostics = collectPackDiagnostics(err?.stdout, err?.stderr, err?.message || 'npm pack failed');
-    const failure = tmError('npm_pack_failed', diagnostics[0] || 'npm pack failed');
+    await appendPackLog(logPath, {
+      header: 'npm pack failure',
+      notes: [`workspace: ${relDir}`],
+      stdout: err?.stdout,
+      stderr: err?.stderr
+    });
+    const failure = tmError('E_NPM_PACK', diagnostics[0] || 'npm pack failed');
     failure.diagnostics = diagnostics;
-    await ee.emit('NPM_PACK_FAIL', { cwd: relDir, code: 'npm_pack_failed', diagnostics, dur_ms: Date.now() - start });
+    failure.logPath = logRel;
+    if (err?.code && err.code !== 'E_NPM_PACK') {
+      failure.cause = err.code;
+    }
+    if (err?.code === 'E_SUMMARY_PARSE') {
+      failure.cause = 'E_SUMMARY_PARSE';
+    }
+    await ee.emit('NPM_PACK_FAIL', {
+      cwd: relDir,
+      code: 'E_NPM_PACK',
+      diagnostics,
+      log: logRel,
+      dur_ms: Date.now() - start,
+      cause: failure.cause
+    });
     throw failure;
   } finally {
     if (before) {
@@ -1302,6 +1471,8 @@ async function locateWinnerDir(composePath) {
   if (process.env.TM_WINNER_DIR) candidates.push(path.resolve(process.env.TM_WINNER_DIR));
   candidates.push(path.join(composeDir, 'winner'));
   candidates.push(path.resolve(process.cwd(), 'winner'));
+  candidates.push(path.resolve(process.cwd(), 'tmp', 'ts-winner'));
+  candidates.push(path.resolve(composeDir, '..', 'tmp', 'ts-winner'));
   const seen = new Set();
   for (const candidate of candidates) {
     if (seen.has(candidate)) continue;
@@ -1344,6 +1515,45 @@ function npmInvocation() {
     return { cmd: process.execPath, args: [execPath, 'pack'] };
   }
   return { cmd: 'npm', args: ['pack'] };
+}
+
+async function ensureDir(dirPath) {
+  await fs.mkdir(dirPath, { recursive: true });
+}
+
+function normalizeTemplatePath(rootDir, filePath) {
+  return path.relative(rootDir, filePath).replace(/\\/g, '/');
+}
+
+async function copyTemplateDir(templateRoot, targetRoot, report, baseTarget = targetRoot) {
+  const entries = await fs.readdir(templateRoot, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name === '.DS_Store') continue;
+    const fromPath = path.join(templateRoot, entry.name);
+    const toPath = path.join(targetRoot, entry.name);
+    if (entry.isDirectory()) {
+      await ensureDir(toPath);
+      await copyTemplateDir(fromPath, toPath, report, baseTarget);
+      continue;
+    }
+
+    try {
+      await fs.access(toPath);
+      report.skipped.push(normalizeTemplatePath(baseTarget, toPath));
+      continue;
+    } catch (err) {
+      if (err && err.code !== 'ENOENT') throw err;
+    }
+
+    await ensureDir(path.dirname(toPath));
+    const content = await fs.readFile(fromPath);
+    await fs.writeFile(toPath, content);
+    try {
+      const stat = await fs.stat(fromPath);
+      await fs.chmod(toPath, stat.mode & 0o777);
+    } catch {}
+    report.created.push(normalizeTemplatePath(baseTarget, toPath));
+  }
 }
 
 const lessonsCmd = program
@@ -1440,10 +1650,331 @@ lessonsCmd
     const outPath = path.resolve(opts.out);
     await fs.mkdir(path.dirname(outPath), { recursive: true });
     const payload = { followups: sortedFollowups, residual_risks: sortedResiduals };
-    await fs.writeFile(outPath, JSON.stringify(payload, null, 2) + '\n');
-
     const relOut = path.relative(process.cwd(), outPath) || outPath;
+    try {
+      await fs.writeFile(outPath, JSON.stringify(payload, null, 2) + '\n');
+    } catch (err) {
+      const message = err?.message || err;
+      const failure = tmError('E_LESSONS_WRITE', `Failed to write lessons output at ${relOut}: ${message}`);
+      failure.cause = err;
+      throw failure;
+    }
+
     console.log(`✓ Lessons mined ${sortedFollowups.length} followups & ${sortedResiduals.length} residual risks from ${processed} reports → ${relOut}`);
+  });
+
+program
+  .command('doctor')
+  .description('Check local environment prerequisites for the True Modules CLI')
+  .option('--json', 'Emit machine-readable JSON')
+  .option('--artifacts <dir>', 'Directory to store doctor artifacts', 'artifacts')
+  .action(async (opts) => {
+    const checkResults = [];
+    const addCheck = (entry) => {
+      checkResults.push(entry);
+    };
+
+    const generatedAt = new Date().toISOString();
+    const artifactsDir = path.resolve(opts.artifacts || 'artifacts');
+    const artifactPath = path.join(artifactsDir, 'doctor.json');
+    const artifactRel = path.relative(process.cwd(), artifactPath) || artifactPath;
+
+    const minNode = parseSemver('18.0.0');
+    const nodeVersion = process.versions?.node || process.version || 'unknown';
+    const parsedNode = parseSemver(nodeVersion);
+    const nodeStatus = compareSemver(parsedNode, minNode) >= 0 ? 'pass' : 'fail';
+    addCheck({
+      id: 'node',
+      name: 'Node.js',
+      status: nodeStatus,
+      message: `Node.js ${nodeVersion}`,
+      details: {
+        version: nodeVersion,
+        minimum: '18.0.0'
+      },
+      hint: nodeStatus === 'pass' ? null : 'Install Node.js 18 or newer from https://nodejs.org/en/download.'
+    });
+
+    const minRust = parseSemver('1.70.0');
+    const rust = await runCommandCapture('rustc', ['--version']);
+    if (!rust.ok) {
+      const missing = rust.code === 'ENOENT';
+      addCheck({
+        id: 'rust',
+        name: 'Rust toolchain',
+        status: missing ? 'warn' : 'fail',
+        message: missing ? 'rustc not found on PATH' : `rustc unavailable (${rust.stderr.trim() || rust.stdout.trim()})`,
+        details: missing ? {} : { stderr: rust.stderr.trim(), stdout: rust.stdout.trim() },
+        hint: 'Install Rust via https://rustup.rs/ to build supporting tooling.'
+      });
+    } else {
+      const rustLine = rust.stdout.trim().split(/\r?\n/)[0] || '';
+      const rustMatch = /rustc\s+(\d+\.\d+\.\d+)/.exec(rustLine);
+      const rustVersion = rustMatch ? rustMatch[1] : 'unknown';
+      const parsedRust = parseSemver(rustVersion);
+      const rustStatus = compareSemver(parsedRust, minRust) >= 0 ? 'pass' : 'warn';
+      addCheck({
+        id: 'rust',
+        name: 'Rust toolchain',
+        status: rustStatus,
+        message: `rustc ${rustVersion}`,
+        details: {
+          version: rustVersion,
+          minimum: '1.70.0'
+        },
+        hint: rustStatus === 'pass' ? null : 'Update Rust (`rustup update`) to ensure tooling builds cleanly.'
+      });
+    }
+
+    const requireForDoctor = createRequire(import.meta.url);
+
+    const tsCheck = (() => {
+      try {
+        const pkgPath = requireForDoctor.resolve('typescript/package.json');
+        const pkg = requireForDoctor(pkgPath);
+        return { status: 'pass', version: pkg?.version || 'unknown' };
+      } catch (err) {
+        if (err && (err.code === 'MODULE_NOT_FOUND' || err.code === 'ERR_MODULE_NOT_FOUND')) {
+          return { status: 'warn', hint: 'Install TypeScript with `npm install --save-dev typescript`.' };
+        }
+        return { status: 'fail', hint: err?.message || 'TypeScript resolution failed.' };
+      }
+    })();
+    addCheck({
+      id: 'typescript',
+      name: 'TypeScript',
+      status: tsCheck.status,
+      message: tsCheck.version ? `typescript ${tsCheck.version}` : 'TypeScript not installed',
+      details: tsCheck.version ? { version: tsCheck.version } : {},
+      hint: tsCheck.hint || null
+    });
+
+    const eslintCheck = (() => {
+      try {
+        const pkgPath = requireForDoctor.resolve('eslint/package.json');
+        const pkg = requireForDoctor(pkgPath);
+        return { status: 'pass', version: pkg?.version || 'unknown' };
+      } catch (err) {
+        if (err && (err.code === 'MODULE_NOT_FOUND' || err.code === 'ERR_MODULE_NOT_FOUND')) {
+          return { status: 'warn', hint: 'Install ESLint with `npm install --save-dev eslint @typescript-eslint/parser`.' };
+        }
+        return { status: 'fail', hint: err?.message || 'ESLint resolution failed.' };
+      }
+    })();
+    addCheck({
+      id: 'eslint',
+      name: 'ESLint',
+      status: eslintCheck.status,
+      message: eslintCheck.version ? `eslint ${eslintCheck.version}` : 'ESLint not installed',
+      details: eslintCheck.version ? { version: eslintCheck.version } : {},
+      hint: eslintCheck.hint || null
+    });
+
+    try {
+      const ajv = makeAjv();
+      const schemaFiles = [
+        'module.schema.json',
+        'compose.schema.json',
+        'coverage.schema.json',
+        'report.schema.json',
+        'events.schema.json'
+      ];
+      for (const file of schemaFiles) {
+        const schema = await loadJSON(path.join(specDir, file));
+        ajv.compile(schema);
+      }
+      addCheck({
+        id: 'ajv',
+        name: 'AJV schema compile',
+        status: 'pass',
+        message: 'All core schemas compile under AJV 2020-12'
+      });
+    } catch (err) {
+      addCheck({
+        id: 'ajv',
+        name: 'AJV schema compile',
+        status: 'fail',
+        message: err?.message || 'AJV compilation failed',
+        hint: 'Run `npm install` to refresh dependencies, then re-run `tm doctor`.'
+      });
+    }
+
+    try {
+      const tmPath = path.join(__dirname, 'tm.mjs');
+      const stat = await fs.stat(tmPath);
+      const isExecutable = (stat.mode & 0o111) !== 0;
+      addCheck({
+        id: 'permissions',
+        name: 'CLI permissions',
+        status: isExecutable ? 'pass' : 'warn',
+        message: isExecutable ? 'tm.mjs is executable' : 'tm.mjs is not executable',
+        hint: isExecutable ? null : 'Run `chmod +x tm.mjs` so shells can invoke the CLI directly.'
+      });
+    } catch (err) {
+      addCheck({
+        id: 'permissions',
+        name: 'CLI permissions',
+        status: 'warn',
+        message: err?.message || 'Unable to inspect tm.mjs permissions',
+        hint: 'Ensure tm.mjs exists and is readable/executable.'
+      });
+    }
+
+    const git = await runCommandCapture('git', ['--version']);
+    if (!git.ok) {
+      const missing = git.code === 'ENOENT';
+      addCheck({
+        id: 'git',
+        name: 'Git',
+        status: missing ? 'warn' : 'fail',
+        message: missing ? 'git not found on PATH' : (git.stderr.trim() || git.stdout.trim() || 'git invocation failed'),
+        hint: 'Install Git from https://git-scm.com/downloads so tm can capture repo metadata.'
+      });
+    } else {
+      addCheck({
+        id: 'git',
+        name: 'Git',
+        status: 'pass',
+        message: git.stdout.trim().split(/\r?\n/)[0] || 'git --version'
+      });
+    }
+
+    const artifactCheck = {
+      id: 'doctor_artifact',
+      name: 'Doctor artifact',
+      status: 'pass',
+      message: `doctor.json saved to ${artifactRel}`,
+      details: { path: artifactPath }
+    };
+    addCheck(artifactCheck);
+
+    const buildPayload = () => {
+      let overall = 'pass';
+      if (checkResults.some(entry => entry.status === 'fail')) {
+        overall = 'fail';
+      } else if (checkResults.some(entry => entry.status === 'warn')) {
+        overall = 'warn';
+      }
+      return {
+        schema: 'tm-doctor@1',
+        generated_at: generatedAt,
+        status: overall,
+        checks: checkResults
+          .map(({ id, name, status, message, hint, details }) => ({
+            id,
+            name,
+            status,
+            message,
+            hint: hint || undefined,
+            details: details || undefined
+          }))
+          .map(entry => {
+            if (!entry.hint) delete entry.hint;
+            if (!entry.details) delete entry.details;
+            return entry;
+          })
+      };
+    };
+
+    try {
+      await ensureDir(artifactsDir);
+      const payloadForFile = buildPayload();
+      await fs.writeFile(artifactPath, JSON.stringify(payloadForFile, null, 2) + '\n');
+    } catch (err) {
+      const detail = err?.message || String(err);
+      artifactCheck.status = 'warn';
+      artifactCheck.message = `Failed to write doctor.json (${detail})`;
+      artifactCheck.details = { path: artifactPath, error: detail };
+      if (err && err.code) {
+        artifactCheck.details.code = err.code;
+      }
+      artifactCheck.hint = 'Ensure the artifacts directory is writable.';
+    }
+
+    const payload = buildPayload();
+    const overall = payload.status;
+
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
+      for (const entry of checkResults) {
+        const icon = entry.status === 'pass' ? '✓' : entry.status === 'warn' ? '⚠️' : '✗';
+        const hintText = entry.hint ? ` — ${entry.hint}` : '';
+        console.error(`${icon} ${entry.name}: ${entry.message}${hintText}`);
+      }
+    } else {
+      for (const entry of checkResults) {
+        const icon = entry.status === 'pass' ? '✓' : entry.status === 'warn' ? '⚠️' : '✗';
+        console.log(`${icon} ${entry.name}: ${entry.message}`);
+        if (entry.hint) {
+          console.log(`    hint: ${entry.hint}`);
+        }
+      }
+      console.log(`Overall status: ${overall.toUpperCase()}`);
+    }
+
+    if (overall === 'fail') {
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('init')
+  .description('Bootstrap a minimal True Modules workspace')
+  .option('--dir <path>', 'Target directory', '.')
+  .option('--ts', 'Include a TypeScript project configuration', false)
+  .option('--mcp', 'Include an MCP façade stub', false)
+  .action(async (opts) => {
+    const targetDir = path.resolve(opts.dir || '.');
+    const templateRoot = path.join(__dirname, 'templates', 'init');
+    const plan = [
+      { name: 'base', enabled: true },
+      { name: 'ts', enabled: Boolean(opts.ts) },
+      { name: 'mcp', enabled: Boolean(opts.mcp) }
+    ];
+
+    await ensureDir(targetDir);
+
+    const report = { created: [], skipped: [] };
+    const applied = [];
+
+    for (const step of plan) {
+      if (!step.enabled) continue;
+      const templateDir = path.join(templateRoot, step.name);
+      let stat;
+      try {
+        stat = await fs.stat(templateDir);
+      } catch (err) {
+        if (err && err.code === 'ENOENT') {
+          continue;
+        }
+        throw err;
+      }
+      if (!stat.isDirectory()) continue;
+      await copyTemplateDir(templateDir, targetDir, report, targetDir);
+      applied.push(step.name);
+    }
+
+    report.created.sort((a, b) => a.localeCompare(b));
+    report.skipped.sort((a, b) => a.localeCompare(b));
+
+    const relTarget = path.relative(process.cwd(), targetDir) || '.';
+    console.log(`✓ Initialized True Modules workspace at ${relTarget}`);
+    if (applied.length > 0) {
+      console.log(`  templates: ${applied.join(', ')}`);
+    }
+    if (report.created.length) {
+      console.log('  created files:');
+      for (const file of report.created) {
+        console.log(`    ${file}`);
+      }
+    }
+    if (report.skipped.length) {
+      console.log('  skipped (already present):');
+      for (const file of report.skipped) {
+        console.log(`    ${file}`);
+      }
+    }
+    console.log('Next: run `node tm.mjs doctor` and update compose/modules as you iterate.');
   });
 
 program
@@ -2573,22 +3104,30 @@ program
               const result = await runNpmPackSmoke(winnerDir, ee);
               const relWinner = path.relative(process.cwd(), winnerDir) || '.';
               if (result?.skipped) {
-                summary.npm_pack = { status: 'skipped', reason: result.reason };
+                summary.npm_pack = {
+                  status: 'skipped',
+                  reason: result.reason,
+                  log: result.logPath || null
+                };
                 phases.push({ name: 'npm_pack', dur_ms: Date.now() - packStart, status: 'skipped' });
               } else {
                 summary.npm_pack = {
                   status: 'passed',
                   workspace: relWinner,
-                  tarball: result?.tarball || null
+                  tarball: result?.tarball || null,
+                  artifact: result?.artifact || null,
+                  log: result?.logPath || null
                 };
                 phases.push({ name: 'npm_pack', dur_ms: Date.now() - packStart, status: 'pass' });
               }
             } catch (err) {
-              if (err && err.code === 'npm_pack_failed') {
-                failureCode = 'npm_pack_failed';
+              if (err && err.code === 'E_NPM_PACK') {
+                failureCode = 'E_NPM_PACK';
                 summary.npm_pack = {
                   status: 'failed',
-                  diagnostics: Array.isArray(err.diagnostics) ? err.diagnostics.slice(0, 5) : []
+                  diagnostics: Array.isArray(err.diagnostics) ? err.diagnostics.slice(0, 5) : [],
+                  log: err.logPath || null,
+                  cause: err.cause || undefined
                 };
               }
               phases.push({ name: 'npm_pack', dur_ms: Date.now() - packStart, status: 'fail' });

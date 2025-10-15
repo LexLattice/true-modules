@@ -1,0 +1,29 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  conceptual:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies (if package.json present)
+        if: hashFiles('package.json') != ''
+        run: npm install
+
+      - name: Run conceptual gates (placeholder)
+        run: |
+          set -euo pipefail
+          if [ -x ./tm.mjs ]; then
+            node tm.mjs compose --compose compose.json --modules-root modules --out winner
+            node tm.mjs gates conceptual --compose compose.json --modules-root modules
+          else
+            echo 'tm.mjs not found. Install the true-modules CLI and update this workflow to use it.' >&2
+          fi

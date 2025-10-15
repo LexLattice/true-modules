@@ -548,7 +548,7 @@ Wave 6 closes out the first loop by exposing `tm` through an MCP façade and p
 1. **`tm doctor`**
 
    * Checks: Node/Rust versions, `typescript`/`eslint` availability, AJV compile, file perms, `git` present.
-   * Output: human + machine-readable JSON (`--json`), actionable hints.
+   * Output: human + machine-readable JSON (`--json`), actionable hints, and `doctor.json` under `--artifacts` (default `artifacts/`).
 
 2. **`tm init`**
 

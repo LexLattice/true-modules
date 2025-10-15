@@ -1,70 +1,91 @@
 {
-  "summary": "Hardened the MCP smoke test to detect leaked tm-mcp-* directories in /tmp and added a --pretty flag to the Python shim for formatted JSON output.",
+  "summary": "Extended tm doctor with an --artifacts flag that persists doctor.json, refreshed contributor docs/templates to call the flag, and updated CI to rely on the CLI-managed artifact.",
   "checklist": [
     {
       "id": "P1",
       "status": "implemented",
-      "notes": "Smoke test now snapshots tm-mcp-* entries in /tmp and fails on leaks; Python shim exposes --pretty to control JSON indentation."
+      "notes": "Added CLI-managed artifact handling for doctor runs and aligned docs plus CI with the new workflow."
     }
   ],
   "architecture": {
     "components_added": [],
     "components_modified": [
       {
-        "path": "mcp/tests/smoke.mjs",
-        "reason": "Tracks prefixed /tmp directories before and after the run to surface leaks."
+        "path": "tm.mjs",
+        "reason": "Persist doctor results via --artifacts and surface write failures as doctor_artifact warnings."
       },
       {
-        "path": "python/tm_cli.py",
-        "reason": "Extends argument parsing and JSON emission to honor a --pretty option."
+        "path": ".github/workflows/ci.yml",
+        "reason": "Invoke tm doctor with --artifacts so CI captures artifacts/doctor.json without shell redirection."
+      },
+      {
+        "path": "docs/contributor-playbook.md",
+        "reason": "Document how to run tm doctor with --artifacts and locate artifacts/doctor.json."
+      },
+      {
+        "path": "templates/init/base/README.md",
+        "reason": "Guide new workspaces to run tm doctor with --artifacts and retain the emitted JSON."
+      },
+      {
+        "path": "docs/implementation-briefs.md",
+        "reason": "Note the artifact emission contract for tm doctor in the feature brief."
       }
     ],
-    "data_flow": "Smoke script snapshots /tmp/tm-mcp-* directories surrounding the fa\u00e7ade boot, while the Python shim routes tm CLI responses through a shared JSON dump that can indent output when requested.",
-    "state_management": "Both changes operate on ephemeral snapshots (lists of directory names or transient CLI payloads); no persistent state is introduced.",
+    "data_flow": "tm doctor now ensures the requested --artifacts directory exists, writes doctor.json beside the CLI JSON stream, and records doctor_artifact status in the payload for CI and local use.",
+    "state_management": "Doctor diagnostics persist in artifacts/doctor.json by default; failed writes downgrade the doctor_artifact check to warn so operators can react.",
     "invariants": [
-      "/tmp entries prefixed with tm-mcp- remain unchanged across the smoke run.",
-      "python/tm_cli.py must always emit valid JSON on stdout regardless of formatting mode."
+      "tm doctor must attempt to save doctor.json under the selected artifacts directory on every run.",
+      "doctor_artifact moves to warn when the JSON payload cannot be written to disk."
     ],
     "tradeoffs": [
-      "Snapshotting names instead of filesystem metadata may miss changes to directory contents but keeps the check lightweight."
+      "Embedding artifact writes in tm doctor centralizes ownership but requires filesystem access during diagnostics."
     ],
     "alternatives_considered": [
       {
-        "option": "Automatically delete unexpected tm-mcp-* directories during the test",
-        "rejected_because": "Would hide regressions in server cleanup behaviour that we want to detect."
+        "option": "Keep artifact creation in CI shell scripts",
+        "rejected_because": "Would leave contributors and automation to maintain separate redirection logic, increasing drift."
       }
     ],
     "open_questions": []
   },
   "tests": {
     "added": [],
-    "how_to_run": "node mcp/tests/smoke.mjs"
+    "how_to_run": "npm run schema:compile"
   },
   "metrics": {
-    "files_changed": 3,
-    "insertions": 63,
-    "deletions": 26
+    "files_changed": 6,
+    "insertions": 97,
+    "deletions": 71
   },
   "decisions": [
     {
-      "option": "Fail the smoke test on tm-mcp-* leaks and support pretty JSON output in the Python shim",
-      "rationale": "Catching temporary directory leaks protects CI hosts, and the pretty flag improves ergonomics without breaking automation.",
+      "option": "Have tm doctor manage artifacts/doctor.json via --artifacts",
+      "rationale": "Keeps local runs, templates, and CI aligned on where the diagnostics live without extra scripting.",
       "rejected_alternatives": [
         {
-          "variant": "Leave the smoke test as-is and rely on manual checks",
-          "reason": "Would miss regression coverage and keep Python responses less readable when debugging.",
-          "confidence": 0.3
+          "variant": "Rely on stdout redirection per environment",
+          "reason": "Divergent shell recipes would be harder to document and easy to forget outside CI.",
+          "confidence": 0.5
         }
       ]
     }
   ],
   "risks": [
-    "Legitimate external processes creating tm-mcp-* directories during the run could trigger false positives."
+    "Read-only workspaces will still warn when doctor.json cannot be written."
   ],
   "residual_risks": [
-    "Pretty output still depends on downstream tooling tolerating multi-line JSON."
+    "CI keeps the doctor step non-blocking, so artifact warnings depend on human follow-up."
   ],
-  "followups": [],
-  "todos": [],
-  "confidence": 0.6
+  "followups": [
+    {
+      "title": "Add regression coverage for doctor_artifact warnings",
+      "priority": "P2",
+      "owner": "tooling",
+      "pointer": "tm.mjs#L1842"
+    }
+  ],
+  "todos": [
+    "Hook doctor.json into local automation that uploads artifacts for reviewers."
+  ],
+  "confidence": 0.7
 }

@@ -1,0 +1,6 @@
+node_modules/
+artifacts/
+.tm/
+winner/
+dist/
+.DS_Store

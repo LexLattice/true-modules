@@ -1,0 +1,18 @@
+{
+  "run_id": "init-demo",
+  "modules": [
+    {
+      "id": "demo.hello",
+      "version": "0.1.0"
+    }
+  ],
+  "wiring": [
+    {
+      "from": "demo.hello:HelloPort",
+      "to": "orchestrator:HelloPort"
+    }
+  ],
+  "constraints": [
+    "no-cross-imports"
+  ]
+}
