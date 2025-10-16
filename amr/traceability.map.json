@@ -1,0 +1,24 @@
+{
+  "REQ-1.1": {
+    "modules": [
+      "reporter"
+    ],
+    "interfaces": [
+      "Reporter.write"
+    ],
+    "tests": [
+      "T-001"
+    ]
+  },
+  "REQ-1.2": {
+    "modules": [
+      "cli"
+    ],
+    "interfaces": [
+      "CLI.parse"
+    ],
+    "tests": [
+      "T-010"
+    ]
+  }
+}

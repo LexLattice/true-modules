@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Canonical Architecture",
+  "type": "object",
+  "required": [
+    "modules",
+    "edges",
+    "schemas_ref"
+  ],
+  "properties": {
+    "modules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "interfaces",
+          "invariants"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "interfaces": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "input",
+                "output",
+                "errors",
+                "pre",
+                "post"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "input": {
+                  "type": "object"
+                },
+                "output": {
+                  "type": "object"
+                },
+                "errors": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "pre": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "post": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "invariants": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "from",
+          "to",
+          "contract"
+        ],
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "contract": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "schemas_ref": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

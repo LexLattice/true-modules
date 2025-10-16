@@ -59,6 +59,21 @@ Cross-link the mined lessons to `docs/meta-history.md` to preserve context on
 why each follow-up matters, especially when multiple reports highlight the same
 risk.
 
+## Automated mining
+
+`scripts/lessons-auto.sh` wraps the miner so CI can refresh `lessons.json`
+whenever `main` shifts. The `lessons.yml` workflow runs on every push, executes
+`tm lessons mine --from "**/report.json" --out lessons.json`, and publishes the
+result as an artifact (or commits it via a bot user if that option is enabled).
+
+Treat the freshly mined file as required reading before you draft new AMR slates
+or BO4 briefs:
+
+- Pull high-priority follow-ups directly into the next brief or `rcm/rcm.json`.
+- Convert lingering residual risks into acceptance criteria or explicit tests.
+- Archive resolved entries in `docs/meta-history.md` so the miner stays focused
+  on current gaps.
+
 ## Examples
 
 Sample fixture reports live under `examples/lessons/` alongside the aggregated

@@ -1,0 +1,22 @@
+{
+  "requirements": [
+    {
+      "id": "REQ-1.1",
+      "text": "User can export report.json",
+      "priority": "P0",
+      "must": true
+    },
+    {
+      "id": "REQ-1.2",
+      "text": "CLI supports --dry-run",
+      "priority": "P1",
+      "must": true
+    },
+    {
+      "id": "REQ-2.1",
+      "text": "Emit events.ndjson during gates",
+      "priority": "P1",
+      "must": false
+    }
+  ]
+}

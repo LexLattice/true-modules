@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Acceptance Tests",
+  "type": "object",
+  "additionalProperties": {
+    "type": "object",
+    "required": [
+      "req",
+      "steps"
+    ],
+    "properties": {
+      "req": {
+        "type": "string"
+      },
+      "oracle": {
+        "type": "string"
+      },
+      "steps": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        }
+      }
+    },
+    "additionalProperties": false
+  }
+}

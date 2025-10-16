@@ -4,9 +4,33 @@ Codifies the tournament-to-merge workflow so every Best-of-4 (BO4) task follows 
 
 ## Pre-flight checklist
 
+- Complete the AMR pre-phase: capture the current brief in `rcm/rcm.json`, harvest 3–4 slates under `amr/slates/var*/`, merge them with `.codex/prompts/amr_merge.md`, then gate the canon via `node scripts/rcm-ssd-check.mjs ...` and `node scripts/tm-amr-verify.mjs ...` (see `docs/amr.md`).
 - Confirm the implementation brief for the current task lives in `docs/implementation-briefs.md` (or supplied external draft) and is finalized.
 - Ensure Codex Cloud access and CLI are configured; see `docs/headless-cloud.md` for environment setup.
 - Pick or create a run slug under `runs/` and stage the helper scripts (`scripts/bo4-*.mjs`, `scripts/codex-watch.mjs`) if missing.
+
+## AMR pre-phase (Bo4-A → Canon)
+
+Treat architecture as its own tournament before kicking off the implementation BO4:
+
+1. Use `.codex/prompts/bo4A_architect.md` to generate 3–4 architecture slates (no code) that answer the active requirement set in `rcm/rcm.json`.
+2. Merge the slates with `.codex/prompts/amr_merge.md`, producing `amr/architecture.json`, `amr/schemas.json`, `amr/acceptance.json`, and an updated `amr/traceability.map.json`.
+3. Run the AMR gates locally (and in CI):
+   ```bash
+   node scripts/rcm-ssd-check.mjs \
+     --rcm rcm/rcm.json \
+     --trace amr/traceability.map.json \
+     --slates amr/slates \
+     --out amr/ssd.json \
+     --fail-low 0.75
+
+   node scripts/tm-amr-verify.mjs \
+     --canon amr/architecture.json \
+     --acceptance amr/acceptance.json \
+     --rcm rcm/rcm.json \
+     --trace amr/traceability.map.json
+   ```
+4. Capture any temporary waivers in `amr/risk_acceptance.md` and record the canon hash/events in your run manifest.
 
 ## Workflow (12 steps)
 

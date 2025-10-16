@@ -131,6 +131,35 @@ logs. Metrics include:
 - **Module results** – pass/fail counts per module covering tests and port
   checks.
 
+Sample `summary.json` payload:
+
+```json
+{
+  "gate_durations": {
+    "total_ms": 3276,
+    "lint_ms": 775,
+    "tests_ms": 1371,
+    "typescript_ms": 999,
+    "port_checks_ms": 0,
+    "other_ms": 131
+  },
+  "failures": {
+    "E_TSC": 1,
+    "E_LINT": 0,
+    "E_TEST": 0,
+    "E_PORT_CONFORMANCE": 0
+  },
+  "slow_tests": [
+    { "module": "git.diff.core", "test": "tests/runner.mjs", "dur_ms": 524 },
+    { "module": "safety.validation", "test": "run_win_cases.mjs", "dur_ms": 443 }
+  ],
+  "module_results": [
+    { "module": "git.diff.core", "passed": 5, "failed": 0 },
+    { "module": "git.index.controller", "passed": 3, "failed": 1 }
+  ]
+}
+```
+
 Example output:
 
 ```text
