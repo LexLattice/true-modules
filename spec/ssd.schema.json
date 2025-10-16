@@ -26,24 +26,86 @@
             "type": "string"
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "per_slate": {
-      "type": "object"
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "byLayer",
+          "overall",
+          "gaps",
+          "notes_len",
+          "modules",
+          "interfaces"
+        ],
+        "properties": {
+          "byLayer": {
+            "type": "object",
+            "required": [
+              "architecture",
+              "data_schemas",
+              "error_model",
+              "cli_surface"
+            ],
+            "properties": {
+              "architecture": { "type": "number" },
+              "data_schemas": { "type": "number" },
+              "error_model": { "type": "number" },
+              "cli_surface": { "type": "number" }
+            },
+            "additionalProperties": false
+          },
+          "overall": { "type": "number" },
+          "gaps": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "notes_len": { "type": "integer" },
+          "modules": { "type": "integer" },
+          "interfaces": { "type": "integer" }
+        },
+        "additionalProperties": false
+      }
     },
     "summary": {
       "type": "object",
+      "required": [
+        "overall_min",
+        "min_by_layer"
+      ],
       "properties": {
         "overall_min": {
           "type": "number"
         },
         "min_by_layer": {
-          "type": "object"
+          "type": "object",
+          "required": [
+            "architecture",
+            "data_schemas",
+            "error_model",
+            "cli_surface"
+          ],
+          "properties": {
+            "architecture": { "type": "number" },
+            "data_schemas": { "type": "number" },
+            "error_model": { "type": "number" },
+            "cli_surface": { "type": "number" }
+          },
+          "additionalProperties": false
         }
-      }
+      },
+      "additionalProperties": false
     },
     "threshold": {
       "type": "number"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
     }
-  }
+  },
+  "additionalProperties": false
 }

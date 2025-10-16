@@ -70,7 +70,7 @@ Treat architecture as its own tournament before kicking off the implementation B
 
 10. **Create and review the PR**  
     - From Codex Cloud, open the PR based on the winning turn-2 variant. Sync the branch locally (`git fetch` the cloud-generated branch).
-    - Inspect bot reviews: Codex/Gemini comments arrive as replies to primary review threads. Resolve issues, run `tm gates shipping --emit-events` locally as needed, and apply outstanding fixes.
+    - Inspect bot reviews: Codex/Gemini comments arrive as replies to primary review threads. Use `./scripts/list-diff-comments.sh <pr-number>` to dump only the line-level (diff-hunk) feedback, then resolve issues, run `tm gates shipping --emit-events` locally as needed, and apply outstanding fixes.
 
 11. **Update records**  
     - Append an entry to `docs/meta-history.md` summarizing: winning variant ID, rationale, imports pulled, why others fell short, review feedback addressed, tradeoffs, residual risks, follow-ups. Link back to the run slug and any follow-up prompt files.

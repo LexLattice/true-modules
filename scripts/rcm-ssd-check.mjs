@@ -17,8 +17,11 @@ const failLow   = Number(arg("--fail-low", "0.75"));
 const die = (msg, code = 1) => { console.error(msg); process.exit(code); };
 
 async function loadJSON(p) {
-  try { return JSON.parse(await fs.readFile(p, "utf8")); }
-  catch (e) { die(`Failed to read JSON: ${p}\n${e.message}`); }
+  try {
+    return JSON.parse(await fs.readFile(p, "utf8"));
+  } catch (e) {
+    die(`Failed to read JSON: ${p}\n${e.message}`);
+  }
 }
 
 function nonEmpty(v) { return Array.isArray(v) ? v.length > 0 : !!v; }
@@ -42,10 +45,22 @@ async function computeRCMCoverage(rcm, trace) {
 
 async function readSlate(dir) {
   const readMaybe = async (f) => {
-    try { return await fs.readFile(path.join(dir, f), "utf8"); } catch { return ""; }
+    const file = path.join(dir, f);
+    try {
+      return await fs.readFile(file, "utf8");
+    } catch (e) {
+      if (e.code === "ENOENT") return "";
+      die(`Failed to read slate file ${file}: ${e.message}`);
+    }
   };
   const tryJson = async (f) => {
-    try { return JSON.parse(await fs.readFile(path.join(dir, f), "utf8")); } catch { return {}; }
+    const file = path.join(dir, f);
+    try {
+      return JSON.parse(await fs.readFile(file, "utf8"));
+    } catch (e) {
+      if (e.code === "ENOENT") return {};
+      die(`Failed to read or parse slate JSON file ${file}: ${e.message}`);
+    }
   };
   const arch = await tryJson("architecture.json");
   const schemas = await tryJson("schemas.json");
@@ -85,22 +100,37 @@ async function readSlate(dir) {
   return { byLayer, overall, gaps, notes_len: notes.length, modules: modCount, interfaces: ifaceCount };
 }
 
+async function loadTraceOptional(p) {
+  try {
+    return JSON.parse(await fs.readFile(p, "utf8"));
+  } catch (e) {
+    if (e.code === "ENOENT") return {};
+    die(`Failed to read or parse trace file ${p}: ${e.message}`);
+  }
+}
+
 (async () => {
   const rcm = await loadJSON(rcmPath);
-  let trace = {};
-  try { trace = await loadJSON(tracePath); } catch {}
+  const trace = await loadTraceOptional(tracePath);
   const rcmCov = await computeRCMCoverage(rcm, trace);
 
   let perSlate = {};
+  let slateDirs;
   try {
-    const dirs = await fs.readdir(slatesDir, { withFileTypes: true });
-    for (const d of dirs) {
-      if (!d.isDirectory()) continue;
-      const name = d.name;
-      const ssd = await readSlate(path.join(slatesDir, name));
-      perSlate[name] = ssd;
-    }
-  } catch {}
+    slateDirs = await fs.readdir(slatesDir, { withFileTypes: true });
+  } catch (e) {
+    if (e.code === "ENOENT") die(`E_SSD_NO_SLATES: Slate directory not found ${slatesDir}`);
+    die(`E_SSD_SLATES_READ: Failed to read ${slatesDir}: ${e.message}`);
+  }
+
+  const directories = slateDirs.filter(d => d.isDirectory());
+  if (!directories.length) die(`E_SSD_NO_SLATES: No slate variants found in ${slatesDir}`);
+
+  for (const d of directories) {
+    const name = d.name;
+    const ssd = await readSlate(path.join(slatesDir, name));
+    perSlate[name] = ssd;
+  }
 
   const layers = ["architecture","data_schemas","error_model","cli_surface"];
   const minByLayer = Object.fromEntries(layers.map(L => {

@@ -20,6 +20,9 @@ function nonEmpty(a) { return Array.isArray(a) && a.length>0; }
   // Basic arch checks
   if (!Array.isArray(arch.modules) || !Array.isArray(arch.edges)) die("E_CANON_SCHEMA: modules/edges missing");
   const ids = new Set(arch.modules.map(m => m.id));
+  const interfaceNames = new Set(
+    arch.modules.flatMap(m => (m.interfaces || []).map(it => it.name))
+  );
   for (const m of arch.modules) {
     if (!m.id) die("E_CANON_SCHEMA: module missing id");
     for (const it of (m.interfaces||[])) {
@@ -30,8 +33,7 @@ function nonEmpty(a) { return Array.isArray(a) && a.length>0; }
   for (const e of arch.edges) {
     if (!ids.has(e.from) || !ids.has(e.to)) die(`E_CANON_SCHEMA: edge references unknown module: ${e.from}->${e.to}`);
     // check contract name exists among interfaces
-    const hasContract = arch.modules.some(m => (m.interfaces||[]).some(it => it.name === e.contract));
-    if (!hasContract) die(`E_CANON_SCHEMA: edge contract not found among interfaces: ${e.contract}`);
+    if (!interfaceNames.has(e.contract)) die(`E_CANON_SCHEMA: edge contract not found among interfaces: ${e.contract}`);
   }
 
   // RCM must coverage via trace
