@@ -10,6 +10,7 @@ configuration, Codex composer, and history timeline).
 npm run dev        # start the console at http://127.0.0.1:5173
 npm run build      # type-check and produce a production bundle in dist/
 npm run lint       # eslint over src/**/*.{ts,tsx}
+npm run test       # vitest acceptance suite
 npm run preview    # serve the built bundle locally
 ```
 

@@ -34,9 +34,9 @@ flows. Telemetry is exposed at `window.__tmTelemetry` for debugging and the
 ### Commands
 
 ```bash
-npm run build --workspace apps/workflow-console   # type-check + Vite build
+npm run build --workspace apps/workflow-console   # type-check + bundle build
 npm run lint --workspace apps/workflow-console    # eslint over src/**/*
-npx playwright test apps/workflow-console/tests/acceptance/ui-console.spec.ts
+npm run test --workspace apps/workflow-console    # Vitest acceptance sweep
 ```
 
 ## Replay & export

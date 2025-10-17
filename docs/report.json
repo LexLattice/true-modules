@@ -1,143 +1,131 @@
 {
-  "summary": "Promoted the workflow console scaffold into a Vite-backed React workspace with streaming telemetry, CLI simulation, Codex auditing, and replay-aware history panes that align with the AMR canon.",
+  "summary": "Sharpened the workflow console wiring: added a shared bootstrap seed, restored live artifact inspection, tightened error messaging, and replaced Playwright with a Vitest-powered DOM harness while documenting the new scripts and dependency trims.",
   "checklist": [
     {
       "id": "P1",
       "status": "implemented",
-      "notes": "Delivered a runnable console, telemetry exports, and acceptance coverage for T-UI-01 through T-UI-04."
+      "notes": "Upgraded service errors, artifact handling, dependency setup, and acceptance coverage to close the remaining console gaps."
     }
   ],
   "architecture": {
     "components_added": [
       {
-        "name": "Vite bootstrap",
-        "path": "apps/workflow-console/src/main.tsx",
-        "role": "ui"
+        "name": "console bootstrap seed",
+        "path": "apps/workflow-console/src/bootstrap.ts",
+        "role": "workflow"
       },
       {
-        "name": "TelemetryHub",
-        "path": "apps/workflow-console/src/services/telemetry.ts",
-        "role": "service"
-      },
-      {
-        "name": "ConsoleServices",
-        "path": "apps/workflow-console/src/services/console-services.ts",
-        "role": "service"
-      },
-      {
-        "name": "Emitter",
-        "path": "apps/workflow-console/src/services/emitter.ts",
+        "name": "vitest configuration",
+        "path": "apps/workflow-console/vitest.config.ts",
         "role": "infra"
       },
       {
-        "name": "Console stylesheet",
-        "path": "apps/workflow-console/src/styles.css",
-        "role": "ui"
-      },
-      {
-        "name": "Workspace README",
-        "path": "apps/workflow-console/README.md",
+        "name": "DOM acceptance harness",
+        "path": "apps/workflow-console/tests/acceptance/ui-console.spec.tsx",
         "role": "workflow"
       }
     ],
     "components_modified": [
       {
-        "path": "apps/workflow-console/src/ui/shell.tsx",
-        "reason": "Wire panes to shared services, add replay banner, and expose telemetry exports."
+        "path": "apps/workflow-console/src/main.tsx",
+        "reason": "Use the shared bootstrap helper so the entrypoint only mounts the shell."
       },
       {
-        "path": "apps/workflow-console/src/services/run-configuration.ts",
-        "reason": "Persist defaults, kickoff runs, stream CLI status, and append run history."
+        "path": "apps/workflow-console/src/services/cli-bridge.ts",
+        "reason": "Describe kickoff conflicts with the manifest runId."
       },
       {
         "path": "apps/workflow-console/src/services/codex-adapter.ts",
-        "reason": "Add streaming suggestions, guardrails, and publish auditing."
+        "reason": "Include the rejected prompt intent in guardrail errors."
       },
       {
-        "path": "apps/workflow-console/src/ui/history-timeline.tsx",
-        "reason": "Freeze live updates during replay and provide event export controls."
-      },
-      {
-        "path": "apps/workflow-console/src/ui/run-configurator.tsx",
-        "reason": "Surface manifest preview with live CLI telemetry and tm-events emission."
+        "path": "apps/workflow-console/src/services/history-store.ts",
+        "reason": "Add contextual runId/userId details to thrown errors."
       },
       {
         "path": "apps/workflow-console/src/ui/workflow-surface.tsx",
-        "reason": "Render dependency tooltips, artifact modal, and workflow replay metadata."
+        "reason": "Resolve live snapshot artifacts before falling back to history."
+      },
+      {
+        "path": "apps/workflow-console/vite.config.ts",
+        "reason": "Drop @vitejs/plugin-react in favor of automatic JSX settings."
+      },
+      {
+        "path": "apps/workflow-console/package.json",
+        "reason": "Trim scoped dev dependencies and expose vitest scripts."
+      },
+      {
+        "path": "docs/ui-console.md",
+        "reason": "Document the updated build, lint, and test commands."
       }
     ],
-    "data_flow": "createConsoleServices hydrates RunStateGateway, HistoryStore, CLIBridge, CodexAdapter, and TelemetryHub; Shell distributes them to each pane so workflow snapshots, CLI validations, Codex drafts, and history actions emit tm-events@1 telemetry.",
-    "state_management": "RunStateGateway simulates staged workflow snapshots, HistoryStore holds run history/defaults/audits, TelemetryHub accumulates tm-events, and React state manages form inputs, CLI status feeds, and artifact modals.",
+    "data_flow": "bootstrapConsole now seeds RunStateGateway and HistoryStore before the shell mounts, and WorkflowSurface inspects live stage artifacts first while telemetry continues to emit CLI, Codex, and replay events via TelemetryHub.",
+    "state_management": "RunStateGateway maintains the active snapshot, HistoryStore still persists runs/defaults/audits with richer errors, and the UI keeps artifact state locally while consulting live snapshots prior to history lookups.",
     "invariants": [
-      "CLI validation must succeed before kickoff and history append.",
-      "Replay mode pauses RunStateGateway updates until operators resume live.",
-      "Codex drafts redact sensitive tokens prior to publication."
+      "Kickoff is blocked until manifests set readyForLaunch=true.",
+      "Live artifact inspection must succeed even before history persistence.",
+      "Telemetry events remain exposed through window.__tmTelemetry."
     ],
     "tradeoffs": [
-      "In-memory simulations keep the console self-contained but diverge from production orchestration edge cases.",
-      "Telemetry exports rely on browser downloads rather than server-side storage."
+      "Manual Vitest DOM harness replaces browser automation, so replay/export flows aren't exercised in a real browser.",
+      "Removing @vitejs/plugin-react avoids blocked scopes but forgoes React fast refresh niceties."
     ],
     "alternatives_considered": [
       {
-        "option": "Bootstrap with Next.js",
-        "rejected_because": "Vite offers faster startup and simpler static hosting for the console."
-      },
-      {
-        "option": "Log telemetry to the console",
-        "rejected_because": "Operators and shipping gates need structured tm-events@1 exports."
+        "option": "Keep the Playwright acceptance suite",
+        "rejected_because": "Registry access to scoped packages is denied, preventing npm install from completing."
       }
     ],
     "open_questions": [
-      "When should the mock services be swapped for production orchestrator APIs?",
-      "Do we need dedicated fixtures for Codex audits beyond the NDJSON export?"
+      "Should the Playwright-based suite return once scoped packages become installable again?"
     ]
   },
   "tests": {
     "added": [
-      "apps/workflow-console/tests/acceptance/ui-console.spec.ts"
+      "apps/workflow-console/tests/acceptance/ui-console.spec.tsx"
     ],
-    "how_to_run": "npx playwright test apps/workflow-console/tests/acceptance/ui-console.spec.ts"
+    "how_to_run": "npm run test --workspace apps/workflow-console"
   },
   "metrics": {
-    "files_changed": 27,
-    "insertions": 1365,
-    "deletions": 104
+    "files_changed": 16,
+    "insertions": 583,
+    "deletions": 350
   },
   "decisions": [
     {
-      "option": "Adopt a Vite workspace for the console",
-      "rationale": "Provides a lightweight dev server that matches the target deployment bundle while fitting into npm workspaces.",
+      "option": "Adopt a Vitest DOM harness for acceptance coverage",
+      "rationale": "Provides deterministic coverage without relying on the blocked @playwright/test package while still exercising seeded console workflows.",
       "rejected_alternatives": [
         {
-          "variant": "Keep the scaffolded shell unbundled",
-          "reason": "Would block acceptance tests, telemetry exports, and real navigation flows.",
-          "confidence": 0.5
+          "variant": "Retain Playwright with skipped specs",
+          "reason": "Would leave T-UI scenarios unverified and npm install would continue to fail.",
+          "confidence": 0.3
         }
       ]
     }
   ],
   "risks": [
-    "Network restrictions may block npm install for new React/Playwright dependencies."
+    "Manual DOM harness may miss browser-only regressions."
   ],
   "residual_risks": [
-    "Mocked CLI telemetry may not capture production error scenarios."
+    "package-lock.json still needs regeneration once the registry ban is lifted."
   ],
   "followups": [
     {
-      "title": "Swap mocks for production orchestration APIs",
+      "title": "Regenerate package-lock with full dependencies when registry access is restored",
       "priority": "P1",
       "owner": "platform",
-      "pointer": "apps/workflow-console/src/services"
+      "pointer": "package.json"
     },
     {
-      "title": "Automate telemetry export into artifacts/events.ndjson during CI",
+      "title": "Reintroduce Playwright coverage after dependency mirror access returns",
       "priority": "P2",
-      "owner": "release-eng",
-      "pointer": "apps/workflow-console/src/services/telemetry.ts#L1"
+      "owner": "qa",
+      "pointer": "apps/workflow-console/tests/acceptance/ui-console.spec.tsx"
     }
   ],
   "todos": [
-    "Integrate the console with the production Codex proxy once available."
+    "Restore @vitejs/plugin-react once dependency installs are permitted to regain fast refresh."
   ],
   "confidence": 0.4
 }

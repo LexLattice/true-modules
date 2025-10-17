@@ -39,7 +39,9 @@ export class HistoryStore {
   appendRun(record: RunHistoryRecord): HistoryReceipt {
     const existing = this.runs.find((item) => item.runId === record.runId);
     if (existing) {
-      throw new Error('E_DUPLICATE');
+      throw new Error(
+        `E_DUPLICATE: run ${record.runId} already exists in history`,
+      );
     }
     this.runs.push(record);
     this.historyEmitter.emit();
@@ -52,7 +54,7 @@ export class HistoryStore {
 
   loadHistory(query: HistoryQuery): HistoryList {
     if (!query.userId) {
-      throw new Error('E_PERMISSION');
+      throw new Error('E_PERMISSION: userId is required to load history');
     }
     const items = this.runs
       .slice()
@@ -64,12 +66,14 @@ export class HistoryStore {
   fetchTimeline(request: HistoryReplayRequest): HistoryView {
     const record = this.runs.find((item) => item.runId === request.runId);
     if (!record) {
-      throw new Error('E_RUN_NOT_FOUND');
+      throw new Error(`E_RUN_NOT_FOUND: unable to locate run ${request.runId}`);
     }
     if (request.mode === 'live') {
       const snapshot = this.runStateGateway.fetchSnapshot();
       if (!snapshot) {
-        throw new Error('E_STATE_UNAVAILABLE');
+        throw new Error(
+          `E_STATE_UNAVAILABLE: no live snapshot available for run ${request.runId}`,
+        );
       }
       return {
         replayMode: 'live',

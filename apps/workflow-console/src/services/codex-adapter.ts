@@ -21,7 +21,9 @@ export class CodexAdapter {
 
   generate(prompt: CodexPrompt): CodexStreamHandle {
     if (!['draft_brief', 'draft_requirement', 'draft_note'].includes(prompt.intent)) {
-      throw new Error('E_INPUT_GUARD');
+      throw new Error(
+        `E_INPUT_GUARD: invalid intent ${prompt.intent}`,
+      );
     }
     if (/forbidden|breach/gi.test(prompt.input)) {
       throw new Error('E_POLICY_GUARD');

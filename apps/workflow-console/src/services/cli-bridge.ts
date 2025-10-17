@@ -65,7 +65,9 @@ export class CLIBridge {
 
   kickoffRun(manifest: RunManifest): KickoffReceipt {
     if (!manifest.readyForLaunch) {
-      throw new Error('E_CONFLICT');
+      throw new Error(
+        `E_CONFLICT: manifest ${manifest.runId} is not ready for launch (readyForLaunch=false)`,
+      );
     }
     const receipt: KickoffReceipt = {
       runId: manifest.runId,

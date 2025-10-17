@@ -29,7 +29,7 @@ export function WorkflowSurface({
   useEffect(() => {
     if (!selectedArtifact) return;
     try {
-      const view = inspectArtifact(history, snapshot?.runId ?? '', selectedArtifact);
+      const view = inspectArtifact(history, snapshot, selectedArtifact);
       setArtifactView(view);
       telemetry.track('workflow', 'artifact.inspect', {
         artifactId: selectedArtifact.artifactId,
@@ -41,7 +41,7 @@ export function WorkflowSurface({
         content: (error as Error).message,
       });
     }
-  }, [selectedArtifact, history]);
+  }, [selectedArtifact, history, snapshot, telemetry]);
 
   const stages = snapshot?.stages ?? [];
 
@@ -108,7 +108,13 @@ export function WorkflowSurface({
         <div className="tm-artifact-modal" role="dialog" aria-modal="true">
           <header>
             <h3>Artifact {artifactView.ref.artifactId}</h3>
-            <button type="button" onClick={() => setArtifactView(null)}>
+            <button
+              type="button"
+              onClick={() => {
+                setArtifactView(null);
+                setSelectedArtifact(null);
+              }}
+            >
               Close
             </button>
           </header>
@@ -121,9 +127,24 @@ export function WorkflowSurface({
 
 function inspectArtifact(
   history: HistoryStore,
-  runId: string,
+  snapshot: WorkflowSnapshot | null,
   ref: ArtifactRef,
 ): ArtifactView {
+  const snapshotArtifact = snapshot?.stages
+    .find((stage) => stage.id === ref.stageId)
+    ?.artifacts.find((artifact) => artifact.artifactId === ref.artifactId);
+
+  if (snapshotArtifact) {
+    return {
+      ref,
+      content:
+        snapshotArtifact.content
+        ?? snapshotArtifact.preview
+        ?? snapshotArtifact.label,
+    };
+  }
+
+  const runId = snapshot?.runId;
   if (runId) {
     const artifact = history.findArtifact(runId, ref.artifactId);
     if (artifact) {
