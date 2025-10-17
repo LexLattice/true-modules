@@ -1,0 +1,3 @@
+- Baseline slate with CLI driving reporter
+- Assumes single output artifact under ./report.json
+- Prioritises minimal module graph (cli -> reporter)

@@ -1,0 +1,53 @@
+{
+  "$id": "amr/slates/var3/schemas.json",
+  "definitions": {
+    "CLIArgs": {
+      "type": "object",
+      "properties": {
+        "argv": { "type": "array", "items": { "type": "string" } },
+        "env": { "type": "object", "additionalProperties": { "type": "string" } }
+      },
+      "required": ["argv"],
+      "additionalProperties": false
+    },
+    "Dispatch": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["plan", "emit"] },
+        "dryRun": { "type": "boolean" }
+      },
+      "required": ["mode"],
+      "additionalProperties": false
+    },
+    "RunSummary": {
+      "type": "object",
+      "properties": {
+        "coverage": { "type": "number", "minimum": 0, "maximum": 1 },
+        "artifacts": { "$ref": "#/definitions/Artifacts" },
+        "events": { "type": "array", "items": { "$ref": "#/definitions/TelemetryEvent" } }
+      },
+      "required": ["coverage", "artifacts"],
+      "additionalProperties": false
+    },
+    "Artifacts": {
+      "type": "object",
+      "properties": {
+        "report": { "type": "string" },
+        "events": { "type": "string" },
+        "riskAcceptance": { "type": "string" }
+      },
+      "required": ["report", "events"],
+      "additionalProperties": false
+    },
+    "TelemetryEvent": {
+      "type": "object",
+      "properties": {
+        "schema": { "type": "string" },
+        "event": { "type": "string" },
+        "detail": { "type": "object" }
+      },
+      "required": ["schema", "event"],
+      "additionalProperties": true
+    }
+  }
+}

@@ -1,0 +1,3 @@
+- Adds telemetry module to persist tm-events@1 alongside report outputs.
+- Orchestrator enforces coverage floor before publishing artifacts or telemetry.
+- CLI dispatch preserves dry-run semantics for downstream modules.

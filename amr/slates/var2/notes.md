@@ -1,0 +1,3 @@
+- Introduces planner module to enforce RCM coverage before emitting artifacts.
+- Reporter emits both JSON report and events stream for downstream gating.
+- Dry-run support surfaced via CLI.plan result metadata.

@@ -1,0 +1,16 @@
+{
+  "T-030": {
+    "req": "REQ-1.1",
+    "oracle": "report.json",
+    "steps": [
+      { "action": "dispatch", "args": ["--export", "report.json"], "assert": "file_exists:report.json" }
+    ]
+  },
+  "T-031": {
+    "req": "REQ-1.2",
+    "oracle": "events.ndjson",
+    "steps": [
+      { "action": "dispatch", "args": ["--dry-run"], "assert": "event:CLI.dispatch" }
+    ]
+  }
+}
