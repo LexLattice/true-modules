@@ -199,6 +199,30 @@ node scripts/eslint-run.mjs ./examples/winner/modules
 
 ## C14 — Docs: “Contributor Playbook”
 
+---
+
+## AMR-UI — Workflow Console & Orchestrator
+
+**Why:** give operators a visual cockpit for the AMR → Bo4 pipeline, with Codex-assisted authoring so they can tune the process without leaving the UI.
+
+**Deliverables:**
+
+* `rcm/rcm.json` updated with UI-centric requirements (visual workflow, configurable variant counts, Codex-assisted authoring, run history).
+* Bo4-A slates (`amr/slates/var1..var4/`) proposing architecture, schemas, acceptance loops, and UX notes for the console.
+* `docs/amr.md` appendix capturing UI-specific gates/telemetry expectations.
+
+**Acceptance:**
+
+* UI surfaces every stage of AMR/Bo4 with status, prerequisites, and artifacts.
+* Operators can adjust variant count, brief depth, reviewer bots, and follow-up policy before kickoff.
+* Codex embeds into the UI so users can draft briefs/requirements and push updates back to the canon.
+* Run history persists so past attempts (config + results + risks) can be replayed or reused.
+
+**Test:**
+
+1. Capture a fresh RCM + slates for the UI console and run `node scripts/rcm-ssd-check.mjs --rcm rcm/rcm.json --trace amr/traceability.map.json --slates amr/slates --out amr/ssd.json --fail-low 0.75`.
+2. Once a canon is frozen, ensure the UI mock consumes the resulting `amr/architecture.json` and renders the workflow swimlane end-to-end.
+
 **Why:** lower friction for new contributors.
 **Deliverables:**
 

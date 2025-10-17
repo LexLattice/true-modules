@@ -1,20 +1,26 @@
 {
   "requirements": [
     {
-      "id": "REQ-1.1",
-      "text": "User can export report.json",
+      "id": "REQ-UI-1",
+      "text": "Operator can visualize the full BO4/AMR workflow with stage status and dependencies",
       "priority": "P0",
       "must": true
     },
     {
-      "id": "REQ-1.2",
-      "text": "CLI supports --dry-run",
+      "id": "REQ-UI-2",
+      "text": "Operator can configure run parameters (variant counts, briefs depth, follow-up toggle, reviewer bots) before kickoff",
+      "priority": "P0",
+      "must": true
+    },
+    {
+      "id": "REQ-UI-3",
+      "text": "UI integrates Codex assistance to draft briefs, requirements, and slate notes inline",
       "priority": "P1",
       "must": true
     },
     {
-      "id": "REQ-2.1",
-      "text": "Emit events.ndjson during gates",
+      "id": "REQ-UI-4",
+      "text": "UI persists configuration and run history so teams can replay past AMR/Bo4 sessions",
       "priority": "P1",
       "must": false
     }
