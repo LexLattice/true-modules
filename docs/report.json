@@ -1,72 +1,143 @@
 {
-  "summary": "Added an events summary command that materializes JSON/markdown dashboards and wired a main-branch workflow to mine lessons automatically.",
+  "summary": "Promoted the workflow console scaffold into a Vite-backed React workspace with streaming telemetry, CLI simulation, Codex auditing, and replay-aware history panes that align with the AMR canon.",
   "checklist": [
     {
       "id": "P1",
       "status": "implemented",
-      "notes": "Introduced tm events summary plus automation to publish summary artifacts and lessons.json."
+      "notes": "Delivered a runnable console, telemetry exports, and acceptance coverage for T-UI-01 through T-UI-04."
     }
   ],
   "architecture": {
-    "components_added": [],
-    "components_modified": [],
-    "data_flow": "tm events summary reads NDJSON telemetry, writes deterministic artifacts/summary.* files, and the lessons workflow reruns gates before mining lessons.json for downstream prompts.",
-    "state_management": "Event aggregates persist as summary.json/summary.md while lessons-auto.sh rewrites lessons.json in the repo root; no long-lived in-memory state added.",
+    "components_added": [
+      {
+        "name": "Vite bootstrap",
+        "path": "apps/workflow-console/src/main.tsx",
+        "role": "ui"
+      },
+      {
+        "name": "TelemetryHub",
+        "path": "apps/workflow-console/src/services/telemetry.ts",
+        "role": "service"
+      },
+      {
+        "name": "ConsoleServices",
+        "path": "apps/workflow-console/src/services/console-services.ts",
+        "role": "service"
+      },
+      {
+        "name": "Emitter",
+        "path": "apps/workflow-console/src/services/emitter.ts",
+        "role": "infra"
+      },
+      {
+        "name": "Console stylesheet",
+        "path": "apps/workflow-console/src/styles.css",
+        "role": "ui"
+      },
+      {
+        "name": "Workspace README",
+        "path": "apps/workflow-console/README.md",
+        "role": "workflow"
+      }
+    ],
+    "components_modified": [
+      {
+        "path": "apps/workflow-console/src/ui/shell.tsx",
+        "reason": "Wire panes to shared services, add replay banner, and expose telemetry exports."
+      },
+      {
+        "path": "apps/workflow-console/src/services/run-configuration.ts",
+        "reason": "Persist defaults, kickoff runs, stream CLI status, and append run history."
+      },
+      {
+        "path": "apps/workflow-console/src/services/codex-adapter.ts",
+        "reason": "Add streaming suggestions, guardrails, and publish auditing."
+      },
+      {
+        "path": "apps/workflow-console/src/ui/history-timeline.tsx",
+        "reason": "Freeze live updates during replay and provide event export controls."
+      },
+      {
+        "path": "apps/workflow-console/src/ui/run-configurator.tsx",
+        "reason": "Surface manifest preview with live CLI telemetry and tm-events emission."
+      },
+      {
+        "path": "apps/workflow-console/src/ui/workflow-surface.tsx",
+        "reason": "Render dependency tooltips, artifact modal, and workflow replay metadata."
+      }
+    ],
+    "data_flow": "createConsoleServices hydrates RunStateGateway, HistoryStore, CLIBridge, CodexAdapter, and TelemetryHub; Shell distributes them to each pane so workflow snapshots, CLI validations, Codex drafts, and history actions emit tm-events@1 telemetry.",
+    "state_management": "RunStateGateway simulates staged workflow snapshots, HistoryStore holds run history/defaults/audits, TelemetryHub accumulates tm-events, and React state manages form inputs, CLI status feeds, and artifact modals.",
     "invariants": [
-      "events summary always writes artifacts/summary.json and artifacts/summary.md for the provided NDJSON",
-      "lessons-auto.sh exits cleanly when no lesson changes are detected"
+      "CLI validation must succeed before kickoff and history append.",
+      "Replay mode pauses RunStateGateway updates until operators resume live.",
+      "Codex drafts redact sensitive tokens prior to publication."
     ],
     "tradeoffs": [
-      "Re-running shipping gates in lessons.yml increases CI time but guarantees fresh events for summaries."
+      "In-memory simulations keep the console self-contained but diverge from production orchestration edge cases.",
+      "Telemetry exports rely on browser downloads rather than server-side storage."
     ],
     "alternatives_considered": [
       {
-        "option": "Reuse artifacts from the ci workflow",
-        "rejected_because": "Cross-workflow artifact sharing would require extra API plumbing and secrets."
+        "option": "Bootstrap with Next.js",
+        "rejected_because": "Vite offers faster startup and simpler static hosting for the console."
+      },
+      {
+        "option": "Log telemetry to the console",
+        "rejected_because": "Operators and shipping gates need structured tm-events@1 exports."
       }
     ],
     "open_questions": [
-      "Should we enable commit mode in lessons-auto.sh once the bot account is ready?"
+      "When should the mock services be swapped for production orchestrator APIs?",
+      "Do we need dedicated fixtures for Codex audits beyond the NDJSON export?"
     ]
   },
   "tests": {
-    "added": [],
-    "how_to_run": "node tm.mjs events summary --in runs/2025-10-13-demo-headless/artifacts/events.ndjson --top 3"
+    "added": [
+      "apps/workflow-console/tests/acceptance/ui-console.spec.ts"
+    ],
+    "how_to_run": "npx playwright test apps/workflow-console/tests/acceptance/ui-console.spec.ts"
   },
   "metrics": {
-    "files_changed": 6,
-    "insertions": 568,
-    "deletions": 0
+    "files_changed": 27,
+    "insertions": 1365,
+    "deletions": 104
   },
   "decisions": [
     {
-      "option": "Publish lessons.json as an artifact instead of committing",
-      "rationale": "Keeps the workflow read-only until automated commit credentials are provisioned.",
+      "option": "Adopt a Vite workspace for the console",
+      "rationale": "Provides a lightweight dev server that matches the target deployment bundle while fitting into npm workspaces.",
       "rejected_alternatives": [
         {
-          "variant": "Auto-commit lessons.json on every main push",
-          "reason": "Requires git credentials in CI and could create merge churn without governance.",
-          "confidence": 0.6
+          "variant": "Keep the scaffolded shell unbundled",
+          "reason": "Would block acceptance tests, telemetry exports, and real navigation flows.",
+          "confidence": 0.5
         }
       ]
     }
   ],
   "risks": [
-    "Gates execution inside lessons.yml could fail, blocking artifact publication."
+    "Network restrictions may block npm install for new React/Playwright dependencies."
   ],
   "residual_risks": [
-    "If gates flake the workflow will not upload fresh summaries despite existing lessons data."
+    "Mocked CLI telemetry may not capture production error scenarios."
   ],
   "followups": [
     {
-      "title": "Enable commit mode once bot credentials exist",
-      "priority": "P2",
+      "title": "Swap mocks for production orchestration APIs",
+      "priority": "P1",
       "owner": "platform",
-      "pointer": "scripts/lessons-auto.sh#L1"
+      "pointer": "apps/workflow-console/src/services"
+    },
+    {
+      "title": "Automate telemetry export into artifacts/events.ndjson during CI",
+      "priority": "P2",
+      "owner": "release-eng",
+      "pointer": "apps/workflow-console/src/services/telemetry.ts#L1"
     }
   ],
   "todos": [
-    "Add unit coverage for summarizeEvents to guard against schema changes."
+    "Integrate the console with the production Codex proxy once available."
   ],
-  "confidence": 0.6
+  "confidence": 0.4
 }

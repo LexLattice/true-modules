@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Ports, specs, composer and scaffolds for True Modules.",
+  "workspaces": [
+    "apps/workflow-console"
+  ],
   "bin": {
     "tm": "./tm.mjs"
   },
@@ -23,6 +26,7 @@
     "commander": "^11.1.0",
     "eslint": "^8.57.1",
     "eslint-plugin-local-rules": "^1.3.2",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "@playwright/test": "^1.45.3"
   }
 }
