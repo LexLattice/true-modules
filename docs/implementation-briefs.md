@@ -617,3 +617,72 @@ Wave 6 closes out the first loop by exposing `tm` through an MCP façade and p
 * Keep **stdout** machine-readable where applicable; route human summaries to **stderr** when `--emit-events` is active.
 * Emit stable **error codes** on all new failure paths (`E_NPM_PACK`, `E_SUMMARY_PARSE`, `E_LESSONS_WRITE`).
 * Prefer **append-safe** file sinks under `artifacts/` and deterministic filenames.
+
+---
+
+## UI-Console — Implement Workflow Orchestrator Console
+
+- **Objective**: Deliver the operator console defined in the AMR canon (`amr/architecture.json`, `amr/schemas.json`, `amr/acceptance.json`, `amr/traceability.map.json`). The UI must visualize the AMR→Bo4 workflow, allow pre-flight configuration, embed Codex assistance, and persist run history with replay/export.
+
+- **Key files**:
+  - Front-end surfaces: `apps/workflow-console/src/ui/{shell.tsx, workflow-surface.tsx, run-configurator.tsx, codex-composer.tsx, history-timeline.tsx}`
+  - Service adapters: `apps/workflow-console/src/services/{session-facade.ts, run-state-gateway.ts, run-configuration.ts, codex-adapter.ts, history-store.ts, cli-bridge.ts}`
+  - Canon types generated from `amr/schemas.json` → `apps/workflow-console/src/types/`
+  - API routes/backends: `apps/workflow-console/api/**` (or extend existing orchestration service)
+  - Acceptance harness: `apps/workflow-console/tests/acceptance/ui-console.spec.ts` (covers T-UI-01…T-UI-04)
+
+- **Implementation steps**:
+  1. **Canon hydration**  
+     - Generate TypeScript types from `amr/schemas.json` (e.g., `typescript-json-schema`, `ajv`).  
+     - Scaffold module shells respecting `amr/architecture.json` (interfaces, invariants as comments).
+  2. **Workflow surface (REQ-UI-1)**  
+     - Render swimlanes with status badges, dependency tooltips, artifact cards.  
+     - Subscribe to `RunStateGateway.subscribeUpdates`; ensure UI refresh ≤2s after snapshot changes.  
+     - Provide artifact inspection modal via `HistoryStore.fetchTimeline` + `WorkflowSurface.inspectArtifact`.
+  3. **Run configurator (REQ-UI-2)**  
+     - Implement form with validation against `ConfigSubmission`/`RunManifest`; support reviewer bots, follow-up policy.  
+     - Invoke `RunConfigurationService.prepareManifest` + `CLIBridge.validateManifest`; display manifest preview and errors.  
+     - Persist defaults via `RunConfigurationService.persistDefaults` for replay seeding.
+  4. **Codex composer (REQ-UI-3)**  
+     - Integrate Codex proxy with streaming suggestions, policy guardrails (`CodexAdapter.generate/redact`), audit logs persisted in `HistoryStore`.  
+     - Provide draft validation/publish flow mirroring `CodexComposer.publishDraft`.
+  5. **History timeline (REQ-UI-4)**  
+     - Persist completed runs (`HistoryStore.appendRun`), render table, support replay/export actions.  
+     - Freeze live workflow updates while replay is active; show replay banner and export controls.
+  6. **CLI status/telemetry**  
+     - Implement `CLI.status` handshake in `svc.cli_bridge` and surface progress / error logs in the UI.  
+     - Emit `tm-events@1` events for key actions (config submit, kickoff, replay, Codex request) using existing event pipeline.
+  7. **Acceptance tests**  
+     - Translate T-UI-01..T-UI-04 into Cypress/Playwright specs.  
+     - Provide stubs for `seed_run_state`, `seed_history`, `simulate_stage_update`, etc., and ensure tests run headless in CI.
+  8. **Docs & onboarding**  
+     - Add operator guide (`docs/ui-console.md` or update `docs/cloud-headless.md`) covering console usage, replay, Codex workflows.  
+     - Mention new commands/flags (e.g., CLI status, replay export) in the contributor playbook if applicable.
+
+- **Acceptance**:
+  - UI displays the full AMR→Bo4 workflow with live status, dependency cues, and artifact inspection (REQ-UI-1).  
+  - Operators configure variant counts, brief depth, reviewer bots, follow-up policy, and see validated manifests + CLI status (REQ-UI-2).  
+  - Codex composer offers inline drafting with policy feedback and persistence to history (REQ-UI-3).  
+  - Run history persists completed runs, supports replay/export, and freezes live updates during replay (REQ-UI-4).  
+  - Tests T-UI-01…T-UI-04 pass locally and in CI; gate failures surface clear error codes.  
+  - Implementation matches the AMR canon (module names, interfaces, invariants); deviations must be justified via updated canon + AMR gates.
+
+- **Tests**:
+  ```bash
+  # Generate/validate schemas & types
+  npm run schema:compile
+
+  # Unit/component suites
+  npm run test --workspace apps/workflow-console
+
+  # Acceptance (choose Cypress or Playwright)
+  npx playwright test apps/workflow-console/tests/acceptance/ui-console.spec.ts
+  # or
+  npx cypress run --spec apps/workflow-console/tests/acceptance/ui-console.cy.ts
+
+  # Gates & canon verification
+  node scripts/rcm-ssd-check.mjs --rcm rcm/rcm.json --trace amr/traceability.map.json --slates amr/slates --out amr/ssd.json --fail-low 0.75
+  node scripts/tm-amr-verify.mjs --canon amr/architecture.json --acceptance amr/acceptance.json --rcm rcm/rcm.json --trace amr/traceability.map.json
+  tm mjs gates conceptual --compose ./compose.json --modules-root ./modules
+  tm mjs gates shipping --compose ./compose.json --modules-root ./modules --emit-events --events-out artifacts/events.ndjson --strict-events
+  ```
