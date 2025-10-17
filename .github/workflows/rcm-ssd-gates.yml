@@ -1,0 +1,34 @@
+name: amr-gates
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+
+jobs:
+  amr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: RCM & SSD gates
+        run: |
+          node scripts/rcm-ssd-check.mjs \
+            --rcm rcm/rcm.json \
+            --trace amr/traceability.map.json \
+            --slates amr/slates \
+            --out amr/ssd.json \
+            --fail-low 0.75
+
+      - name: Upload AMR artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: amr-ssd
+          path: |
+            amr/ssd.json
+            amr/traceability.map.json
+            rcm/rcm.json

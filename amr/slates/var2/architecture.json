@@ -1,0 +1,54 @@
+{
+  "modules": [
+    {
+      "id": "cli",
+      "purpose": "Collect flags and orchestrate run",
+      "interfaces": [
+        {
+          "name": "CLI.plan",
+          "input": { "$ref": "#/definitions/CLIArgs" },
+          "output": { "$ref": "#/definitions/RunPlan" },
+          "errors": ["E_PARSE", "E_CONFIG"],
+          "pre": ["argv.length >= 1"],
+          "post": ["output.steps.length > 0"]
+        }
+      ],
+      "invariants": ["CLI.plan is deterministic"]
+    },
+    {
+      "id": "planner",
+      "purpose": "Validate requirements and assemble run plan",
+      "interfaces": [
+        {
+          "name": "Planner.vet",
+          "input": { "$ref": "#/definitions/RunPlan" },
+          "output": { "$ref": "#/definitions/RunSummary" },
+          "errors": ["E_REQ_UNCOVERED"],
+          "pre": ["input.steps.length > 0"],
+          "post": ["result.coverage >= 0.75"]
+        }
+      ],
+      "invariants": ["Planner.vet enforces coverage threshold"]
+    },
+    {
+      "id": "reporter",
+      "purpose": "Persist report.json and events.ndjson",
+      "interfaces": [
+        {
+          "name": "Reporter.emit",
+          "input": { "$ref": "#/definitions/RunSummary" },
+          "output": { "$ref": "#/definitions/Artifacts" },
+          "errors": ["E_IO"],
+          "pre": ["input.coverage >= 0.75"],
+          "post": ["fs.exists(output.report)"]
+        }
+      ],
+      "invariants": ["Reporter.emit writes both report and events"]
+    }
+  ],
+  "edges": [
+    { "from": "cli", "to": "planner", "contract": "Planner.vet" },
+    { "from": "planner", "to": "reporter", "contract": "Reporter.emit" }
+  ],
+  "schemas_ref": "schemas.json"
+}

@@ -1,0 +1,16 @@
+{
+  "T-001": {
+    "req": "REQ-1.1",
+    "oracle": "report.json",
+    "steps": [
+      { "action": "run_cli", "args": ["--export", "report.json"], "assert": "file_exists:report.json" }
+    ]
+  },
+  "T-010": {
+    "req": "REQ-1.2",
+    "oracle": "console",
+    "steps": [
+      { "action": "run_cli", "args": ["--dry-run"], "assert": "stdout_contains:DRY_RUN" }
+    ]
+  }
+}

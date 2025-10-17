@@ -1,0 +1,17 @@
+{
+  "T-020": {
+    "req": "REQ-1.1",
+    "oracle": "report.json",
+    "steps": [
+      { "action": "compose_plan", "assert": "coverage>=0.75" },
+      { "action": "emit_report", "assert": "file_exists:report.json" }
+    ]
+  },
+  "T-021": {
+    "req": "REQ-1.2",
+    "oracle": "console",
+    "steps": [
+      { "action": "run_cli", "args": ["--dry-run"], "assert": "stdout_contains:Dry run mode enabled" }
+    ]
+  }
+}

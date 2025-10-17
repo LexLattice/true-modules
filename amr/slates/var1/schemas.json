@@ -1,0 +1,34 @@
+{
+  "$id": "amr/slates/var1/schemas.json",
+  "definitions": {
+    "CLIArgs": {
+      "type": "object",
+      "properties": {
+        "argv": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["argv"],
+      "additionalProperties": false
+    },
+    "RunSpec": {
+      "type": "object",
+      "properties": {
+        "brief": { "type": "string" },
+        "dryRun": { "type": "boolean" }
+      },
+      "required": ["brief"],
+      "additionalProperties": false
+    },
+    "RunSummary": {
+      "type": "object",
+      "properties": {
+        "completed": { "type": "boolean" },
+        "reportPath": { "type": "string" }
+      },
+      "required": ["completed", "reportPath"],
+      "additionalProperties": false
+    }
+  }
+}

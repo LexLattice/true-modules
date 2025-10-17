@@ -1,0 +1,38 @@
+{
+  "modules": [
+    {
+      "id": "cli",
+      "purpose": "Parse CLI flags and hand off to reporter",
+      "interfaces": [
+        {
+          "name": "CLI.parse",
+          "input": { "$ref": "#/definitions/CLIArgs" },
+          "output": { "$ref": "#/definitions/RunSpec" },
+          "errors": ["E_PARSE"],
+          "pre": ["argv.length >= 1"],
+          "post": ["result.valid === true"]
+        }
+      ],
+      "invariants": ["CLI.parse is idempotent"]
+    },
+    {
+      "id": "reporter",
+      "purpose": "Materialize report.json on disk",
+      "interfaces": [
+        {
+          "name": "Reporter.write",
+          "input": { "$ref": "#/definitions/RunSummary" },
+          "output": { "path": "string" },
+          "errors": ["E_IO"],
+          "pre": ["input.completed === true"],
+          "post": ["fs.exists(output.path)"]
+        }
+      ],
+      "invariants": ["Reporter.write is deterministic"]
+    }
+  ],
+  "edges": [
+    { "from": "cli", "to": "reporter", "contract": "Reporter.write" }
+  ],
+  "schemas_ref": "schemas.json"
+}

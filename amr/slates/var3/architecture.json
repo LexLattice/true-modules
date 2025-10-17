@@ -1,0 +1,70 @@
+{
+  "modules": [
+    {
+      "id": "cli",
+      "purpose": "CLI entry point that fans out to orchestrator",
+      "interfaces": [
+        {
+          "name": "CLI.dispatch",
+          "input": { "$ref": "#/definitions/CLIArgs" },
+          "output": { "$ref": "#/definitions/Dispatch" },
+          "errors": ["E_PARSE"],
+          "pre": ["argv.length > 0"],
+          "post": ["output.mode in ['plan','emit']"]
+        }
+      ],
+      "invariants": ["CLI.dispatch handles --dry-run flag"]
+    },
+    {
+      "id": "orchestrator",
+      "purpose": "Apply AMR canon and orchestrate module execution",
+      "interfaces": [
+        {
+          "name": "Orchestrator.run",
+          "input": { "$ref": "#/definitions/Dispatch" },
+          "output": { "$ref": "#/definitions/RunSummary" },
+          "errors": ["E_TRACE_GAP", "E_IO"],
+          "pre": ["input.mode != null"],
+          "post": ["output.coverage >= 0.8"]
+        }
+      ],
+      "invariants": ["Orchestrator.run records event timeline"]
+    },
+    {
+      "id": "reporter",
+      "purpose": "Publish artifacts and risk acceptance notes",
+      "interfaces": [
+        {
+          "name": "Reporter.publish",
+          "input": { "$ref": "#/definitions/RunSummary" },
+          "output": { "$ref": "#/definitions/Artifacts" },
+          "errors": ["E_IO", "E_PERMS"],
+          "pre": ["input.coverage >= 0.8"],
+          "post": ["fs.exists(output.report) && fs.exists(output.events)"]
+        }
+      ],
+      "invariants": ["Reporter.publish is idempotent"]
+    },
+    {
+      "id": "telemetry",
+      "purpose": "Stream tm-events@1 records to sinks",
+      "interfaces": [
+        {
+          "name": "Telemetry.record",
+          "input": { "$ref": "#/definitions/TelemetryEvent" },
+          "output": { "ack": "boolean" },
+          "errors": ["E_TELEMETRY_BACKPRESSURE"],
+          "pre": ["input.schema === 'tm-events@1'"],
+          "post": ["output.ack === true"]
+        }
+      ],
+      "invariants": ["Telemetry.record preserves emit order"]
+    }
+  ],
+  "edges": [
+    { "from": "cli", "to": "orchestrator", "contract": "Orchestrator.run" },
+    { "from": "orchestrator", "to": "reporter", "contract": "Reporter.publish" },
+    { "from": "orchestrator", "to": "telemetry", "contract": "Telemetry.record" }
+  ],
+  "schemas_ref": "schemas.json"
+}

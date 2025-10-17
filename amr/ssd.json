@@ -1,0 +1,59 @@
+{
+  "rcm_coverage": {
+    "must_total": 2,
+    "covered": 2,
+    "uncovered": []
+  },
+  "per_slate": {
+    "var1": {
+      "byLayer": {
+        "architecture": 1,
+        "data_schemas": 1,
+        "error_model": 1,
+        "cli_surface": 1
+      },
+      "overall": 1,
+      "gaps": [],
+      "notes_len": 149,
+      "modules": 2,
+      "interfaces": 2
+    },
+    "var2": {
+      "byLayer": {
+        "architecture": 1,
+        "data_schemas": 1,
+        "error_model": 1,
+        "cli_surface": 1
+      },
+      "overall": 1,
+      "gaps": [],
+      "notes_len": 211,
+      "modules": 3,
+      "interfaces": 3
+    },
+    "var3": {
+      "byLayer": {
+        "architecture": 1,
+        "data_schemas": 1,
+        "error_model": 1,
+        "cli_surface": 1
+      },
+      "overall": 1,
+      "gaps": [],
+      "notes_len": 221,
+      "modules": 4,
+      "interfaces": 4
+    }
+  },
+  "summary": {
+    "overall_min": 1,
+    "min_by_layer": {
+      "architecture": 1,
+      "data_schemas": 1,
+      "error_model": 1,
+      "cli_surface": 1
+    }
+  },
+  "threshold": 0.75,
+  "generated_at": "2025-10-17T00:15:49.357Z"
+}

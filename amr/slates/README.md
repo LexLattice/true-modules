@@ -1,0 +1,1 @@
+Place Bo4-A architecture slates under var1..var4/ with architecture.json, schemas.json, acceptance.json, notes.md
