@@ -1,16 +1,38 @@
 {
-  "T-030": {
-    "req": "REQ-1.1",
-    "oracle": "report.json",
+  "T-REQ-UI-1": {
+    "req": "REQ-UI-1",
+    "oracle": "snapshots/workflow_surface.png",
     "steps": [
-      { "action": "dispatch", "args": ["--export", "report.json"], "assert": "file_exists:report.json" }
+      { "action": "seed_run_state", "args": { "run_id": "run-001", "stages": 5 }, "assert": "seed.success == true" },
+      { "action": "open_console", "args": { "view": "workflow" }, "assert": "ui.stage_lanes == 5" },
+      { "action": "poll_status", "args": { "interval_ms": 500, "times": 4 }, "assert": "ui.artifact_links_per_stage >= 1" }
     ]
   },
-  "T-031": {
-    "req": "REQ-1.2",
-    "oracle": "events.ndjson",
+  "T-REQ-UI-2": {
+    "req": "REQ-UI-2",
+    "oracle": "logs/config_submission.json",
     "steps": [
-      { "action": "dispatch", "args": ["--dry-run"], "assert": "event:CLI.dispatch" }
+      { "action": "open_console", "args": { "view": "config" }, "assert": "panel.fields.includes('variant_count')" },
+      { "action": "edit_config", "args": { "variant_count": 3, "brief_depth": "deep", "reviewer_bots": ["bot-a"], "follow_up_policy": "auto" }, "assert": "panel.validation_errors == 0" },
+      { "action": "submit_config", "args": {}, "assert": "ack.accepted == true" }
+    ]
+  },
+  "T-REQ-UI-3": {
+    "req": "REQ-UI-3",
+    "oracle": "logs/codex_assist.trace.json",
+    "steps": [
+      { "action": "open_codex_assist", "args": { "intent": "brief" }, "assert": "assist.available == true" },
+      { "action": "invoke_codex", "args": { "prompt": "draft AMR brief" }, "assert": "draft.content.length > 0" },
+      { "action": "validate_draft", "args": {}, "assert": "report.issues.length == 0" }
+    ]
+  },
+  "T-REQ-UI-4": {
+    "req": "REQ-UI-4",
+    "oracle": "db/history_records.snapshot",
+    "steps": [
+      { "action": "seed_history", "args": { "count": 2 }, "assert": "history.count == 2" },
+      { "action": "open_console", "args": { "view": "history" }, "assert": "ui.history_table.rows == 2" },
+      { "action": "replay_run", "args": { "run_id": "run-0002" }, "assert": "session.mode == 'replay'" }
     ]
   }
 }

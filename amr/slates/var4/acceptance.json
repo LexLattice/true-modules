@@ -1,0 +1,38 @@
+{
+  "T-UI-01": {
+    "req": "REQ-UI-1",
+    "oracle": "oracles/ui/workflow-swimlanes.png",
+    "steps": [
+      { "action": "seed_history", "args": { "runId": "bo4-777", "stages": 5 }, "assert": "history.count == 1" },
+      { "action": "open_console", "args": { "runId": "bo4-777" }, "assert": "swimlane('Bo4 finalize').status == 'ready'" },
+      { "action": "hover_stage", "args": { "stage": "AMR triage" }, "assert": "dependencies.visible == true" }
+    ]
+  },
+  "T-UI-02": {
+    "req": "REQ-UI-2",
+    "oracle": "oracles/ui/configurator-form.png",
+    "steps": [
+      { "action": "load_run_template", "args": { "runId": "bo4-888" }, "assert": "template.allowedVariants > 1" },
+      { "action": "configure_run", "args": { "variants": 3, "briefDepth": 2, "reviewerBots": ["bot-a", "bot-b"], "followUpPolicy": "auto" }, "assert": "draft.status == 'valid'" },
+      { "action": "submit_config", "assert": "commit.status == 'staged'" }
+    ]
+  },
+  "T-UI-03": {
+    "req": "REQ-UI-3",
+    "oracle": "oracles/ui/codex-compose.png",
+    "steps": [
+      { "action": "open_codex_workbench", "args": { "context": "brief" }, "assert": "workbench.visible == true" },
+      { "action": "compose_with_codex", "args": { "prompt": "Draft AMR brief" }, "assert": "response.draftSegments.length > 0" },
+      { "action": "validate_draft", "assert": "validation.isValid == true" }
+    ]
+  },
+  "T-UI-04": {
+    "req": "REQ-UI-4",
+    "oracle": "oracles/ui/history-replay.png",
+    "steps": [
+      { "action": "record_session", "args": { "runId": "bo4-123" }, "assert": "history.latest.runId == 'bo4-123'" },
+      { "action": "open_console", "args": { "runId": "bo4-123", "mode": "replay" }, "assert": "replay.timeline.length > 0" },
+      { "action": "export_artifacts", "args": { "targetPath": "exports/bo4-123" }, "assert": "export.ack.status == 'accepted'" }
+    ]
+  }
+}

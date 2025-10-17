@@ -1,70 +1,281 @@
 {
   "modules": [
     {
-      "id": "cli",
-      "purpose": "CLI entry point that fans out to orchestrator",
+      "id": "ui.console_shell",
+      "purpose": "Coordinate Bo4-AMR console layout, state hydration, and operator commands.",
       "interfaces": [
         {
-          "name": "CLI.dispatch",
-          "input": { "$ref": "#/definitions/CLIArgs" },
-          "output": { "$ref": "#/definitions/Dispatch" },
-          "errors": ["E_PARSE"],
-          "pre": ["argv.length > 0"],
-          "post": ["output.mode in ['plan','emit']"]
+          "name": "ConsoleShell.init",
+          "input": { "$ref": "schema.SessionContext" },
+          "output": { "$ref": "schema.ShellState" },
+          "errors": ["E_AUTH", "E_INIT_TIMEOUT"],
+          "pre": ["context.user_id != ''", "'bo4:view' in context.permissions"],
+          "post": ["state.active_view in ['workflow', 'history']", "state.snapshot.stage_count >= 1"]
+        },
+        {
+          "name": "ConsoleShell.routeEvent",
+          "input": { "$ref": "schema.ShellEvent" },
+          "output": { "$ref": "schema.ShellState" },
+          "errors": ["E_EVENT_REJECTED", "E_ACCESS_DENIED"],
+          "pre": ["event.type in ['NAV', 'CONFIG_EDIT', 'RUN_START']"],
+          "post": ["result.snapshot.updated_at >= event.occurred_at"]
         }
       ],
-      "invariants": ["CLI.dispatch handles --dry-run flag"]
+      "invariants": [
+        "Shell state diff propagates to child views within 2s",
+        "Only operators with 'bo4:run' may emit RUN_START events"
+      ]
     },
     {
-      "id": "orchestrator",
-      "purpose": "Apply AMR canon and orchestrate module execution",
+      "id": "ui.workflow_surface",
+      "purpose": "Render AMR→Bo4 workflow timeline with stage dependencies, artifacts, and live status.",
       "interfaces": [
         {
-          "name": "Orchestrator.run",
-          "input": { "$ref": "#/definitions/Dispatch" },
-          "output": { "$ref": "#/definitions/RunSummary" },
-          "errors": ["E_TRACE_GAP", "E_IO"],
-          "pre": ["input.mode != null"],
-          "post": ["output.coverage >= 0.8"]
+          "name": "WorkflowSurface.render",
+          "input": { "$ref": "schema.WorkflowSnapshot" },
+          "output": { "$ref": "schema.RenderResult" },
+          "errors": ["E_LAYOUT", "E_DATA_STALE"],
+          "pre": ["snapshot.stages.length >= 4", "snapshot.lineage.valid == true"],
+          "post": ["result.sections == snapshot.stages.length", "result.last_refresh_latency_ms <= 2000"]
         }
       ],
-      "invariants": ["Orchestrator.run records event timeline"]
+      "invariants": [
+        "Stage swimlanes ordered by dependency rank",
+        "Failed stages are highlighted until rerun succeeds"
+      ]
     },
     {
-      "id": "reporter",
-      "purpose": "Publish artifacts and risk acceptance notes",
+      "id": "ui.config_panel",
+      "purpose": "Expose pre-flight configuration for variant counts, brief depth, reviewer bots, and follow-up policy.",
       "interfaces": [
         {
-          "name": "Reporter.publish",
-          "input": { "$ref": "#/definitions/RunSummary" },
-          "output": { "$ref": "#/definitions/Artifacts" },
-          "errors": ["E_IO", "E_PERMS"],
-          "pre": ["input.coverage >= 0.8"],
-          "post": ["fs.exists(output.report) && fs.exists(output.events)"]
+          "name": "ConfigPanel.loadDraft",
+          "input": { "$ref": "schema.ShellState" },
+          "output": { "$ref": "schema.ConfigDraft" },
+          "errors": ["E_CONFIG_LOCKED", "E_HISTORY_UNAVAILABLE"],
+          "pre": ["state.mode in ['draft', 'replay']"],
+          "post": ["draft.parameters.variant_count >= 1"]
+        },
+        {
+          "name": "ConfigPanel.submit",
+          "input": { "$ref": "schema.ConfigDraft" },
+          "output": { "$ref": "schema.RunConfigAck" },
+          "errors": ["E_VALIDATION", "E_CONFLICT", "E_ACCESS_DENIED"],
+          "pre": ["draft.meta.status == 'ready'"],
+          "post": ["ack.accepted == true implies ack.lock_version > 0"]
         }
       ],
-      "invariants": ["Reporter.publish is idempotent"]
+      "invariants": [
+        "Configuration controls disabled while run is active",
+        "Variant counts capped at policy.max_variants"
+      ]
     },
     {
-      "id": "telemetry",
-      "purpose": "Stream tm-events@1 records to sinks",
+      "id": "ui.codex_assist",
+      "purpose": "Provide inline Codex drafting for briefs, requirements, and slate notes with validation guardrails.",
       "interfaces": [
         {
-          "name": "Telemetry.record",
-          "input": { "$ref": "#/definitions/TelemetryEvent" },
-          "output": { "ack": "boolean" },
-          "errors": ["E_TELEMETRY_BACKPRESSURE"],
-          "pre": ["input.schema === 'tm-events@1'"],
-          "post": ["output.ack === true"]
+          "name": "CodexAssist.requestDraft",
+          "input": { "$ref": "schema.CodexPromptSpec" },
+          "output": { "$ref": "schema.CodexDraft" },
+          "errors": ["E_CODEx_FAIL", "E_PROMPT_INVALID"],
+          "pre": ["prompt.intent in ['brief', 'requirement', 'note']"],
+          "post": ["draft.tokens <= prompt.max_tokens"]
+        },
+        {
+          "name": "CodexAssist.validateDraft",
+          "input": { "$ref": "schema.CodexDraft" },
+          "output": { "$ref": "schema.ValidationReport" },
+          "errors": ["E_SCHEMA_MISMATCH", "E_POLICY_BLOCK"],
+          "pre": ["draft.source == 'codex'"],
+          "post": ["report.issues.length == 0 implies draft.status == 'ready'"]
         }
       ],
-      "invariants": ["Telemetry.record preserves emit order"]
+      "invariants": [
+        "All Codex outputs tagged with provenance metadata",
+        "Validation enforces RCM schema compatibility"
+      ]
+    },
+    {
+      "id": "service.session_facade",
+      "purpose": "Mediate secure access to run orchestration, history persistence, and authorization for the console.",
+      "interfaces": [
+        {
+          "name": "SessionFacade.getSnapshot",
+          "input": { "$ref": "schema.RunLocator" },
+          "output": { "$ref": "schema.WorkflowSnapshot" },
+          "errors": ["E_ACCESS_DENIED", "E_SNAPSHOT_STALE"],
+          "pre": ["locator.run_id != ''"],
+          "post": ["snapshot.run_id == locator.run_id"]
+        },
+        {
+          "name": "SessionFacade.saveConfig",
+          "input": { "$ref": "schema.RunConfig" },
+          "output": { "$ref": "schema.RunConfigAck" },
+          "errors": ["E_ACCESS_DENIED", "E_CONFLICT"],
+          "pre": ["config.meta.requestor_id != ''"],
+          "post": ["ack.accepted implies ack.lock_version == config.meta.lock_version + 1"]
+        },
+        {
+          "name": "SessionFacade.startRun",
+          "input": { "$ref": "schema.RunLocator" },
+          "output": { "$ref": "schema.StartAck" },
+          "errors": ["E_ACCESS_DENIED", "E_STAGE_BLOCKED", "E_ORCHESTRATOR_DOWN"],
+          "pre": ["locator.mode in ['fresh', 'replay']"],
+          "post": ["ack.started implies ack.state == 'running'"]
+        },
+        {
+          "name": "SessionFacade.listHistory",
+          "input": { "$ref": "schema.SessionContext" },
+          "output": { "$ref": "schema.RunHistoryList" },
+          "errors": ["E_ACCESS_DENIED", "E_HISTORY_CORRUPT"],
+          "pre": ["'bo4:view' in context.permissions"],
+          "post": ["list.entries.every(e => e.run_id != '')"]
+        }
+      ],
+      "invariants": [
+        "Facade enforces gating state machine before start",
+        "History reads cached for <=5m to avoid stale manifests"
+      ]
+    },
+    {
+      "id": "service.run_orchestrator",
+      "purpose": "Manage AMR→Bo4 stage transitions and delegate execution to existing automation scripts.",
+      "interfaces": [
+        {
+          "name": "RunOrchestrator.fetchSnapshot",
+          "input": { "$ref": "schema.RunLocator" },
+          "output": { "$ref": "schema.WorkflowSnapshot" },
+          "errors": ["E_MANIFEST_MISSING", "E_STAGE_DESYNC"],
+          "pre": ["locator.run_id != ''"],
+          "post": ["snapshot.manifest_version >= locator.expected_version"]
+        },
+        {
+          "name": "RunOrchestrator.applyConfig",
+          "input": { "$ref": "schema.RunConfig" },
+          "output": { "$ref": "schema.RunConfigAck" },
+          "errors": ["E_STAGE_LOCKED", "E_VALIDATION"],
+          "pre": ["config.parameters.variant_count >= 1"],
+          "post": ["ack.accepted implies snapshot_version_increment == 1"]
+        },
+        {
+          "name": "RunOrchestrator.start",
+          "input": { "$ref": "schema.RunLocator" },
+          "output": { "$ref": "schema.StartAck" },
+          "errors": ["E_STAGE_BLOCKED", "E_SCRIPT_FAILURE"],
+          "pre": ["locator.mode in ['fresh', 'replay']"],
+          "post": ["ack.started implies ack.state == 'running'"]
+        }
+      ],
+      "invariants": [
+        "Enforces AMR→Bo4 dependency order",
+        "Retries CLI invocations up to 3 times before surfacing failure"
+      ]
+    },
+    {
+      "id": "service.history_store",
+      "purpose": "Persist run configurations, execution logs, and replay metadata for future sessions.",
+      "interfaces": [
+        {
+          "name": "HistoryStore.listRuns",
+          "input": { "$ref": "schema.SessionContext" },
+          "output": { "$ref": "schema.RunHistoryList" },
+          "errors": ["E_DATA_UNAVAILABLE", "E_ACCESS_DENIED"],
+          "pre": ["context.org_id != ''"],
+          "post": ["list.entries.length >= 0"]
+        },
+        {
+          "name": "HistoryStore.persistRun",
+          "input": { "$ref": "schema.RunRecord" },
+          "output": { "$ref": "schema.PersistAck" },
+          "errors": ["E_WRITE_FAIL", "E_ACCESS_DENIED"],
+          "pre": ["record.run_id != ''"],
+          "post": ["ack.saved == true implies record.version >= 1"]
+        }
+      ],
+      "invariants": [
+        "Run records immutable after seal",
+        "Replay retrieval returns consistent config snapshot"
+      ]
+    },
+    {
+      "id": "service.codex_proxy",
+      "purpose": "Bridge UI Codex requests to Codex APIs with rate limiting and audit logging.",
+      "interfaces": [
+        {
+          "name": "CodexProxy.invoke",
+          "input": { "$ref": "schema.CodexCall" },
+          "output": { "$ref": "schema.CodexDraft" },
+          "errors": ["E_CODEx_FAIL", "E_RATE_LIMIT", "E_SCHEMA_MISMATCH"],
+          "pre": ["call.prompt.tokens <= call.policy.max_tokens"],
+          "post": ["draft.metadata.trace_id != ''"]
+        }
+      ],
+      "invariants": [
+        "Rate limit 10 calls/min per operator",
+        "Audit log stored for every Codex completion"
+      ]
+    },
+    {
+      "id": "service.authz_guard",
+      "purpose": "Authorize console actions against org policies and role assignments.",
+      "interfaces": [
+        {
+          "name": "AuthzGuard.verifyAccess",
+          "input": { "$ref": "schema.AccessRequest" },
+          "output": { "$ref": "schema.AccessGrant" },
+          "errors": ["E_UNAUTHENTICATED", "E_FORBIDDEN"],
+          "pre": ["request.user_id != ''"],
+          "post": ["grant.allowed implies request.permission in grant.granted"]
+        }
+      ],
+      "invariants": [
+        "Authorization cached for <=60s",
+        "Denied requests emit security audit events"
+      ]
+    },
+    {
+      "id": "integration.cli_bridge",
+      "purpose": "Invoke existing CLI workflows (tm.mjs, scripts/rcm-ssd-check.mjs) for orchestration steps.",
+      "interfaces": [
+        {
+          "name": "CliBridge.triggerScript",
+          "input": { "$ref": "schema.ScriptInvocation" },
+          "output": { "$ref": "schema.ScriptResult" },
+          "errors": ["E_SCRIPT_FAILURE", "E_TIMEOUT"],
+          "pre": ["invocation.script in ['tm.mjs', 'rcm-ssd-check.mjs']"],
+          "post": ["result.exit_code == 0 implies result.status == 'ok'"]
+        },
+        {
+          "name": "CLI.status",
+          "input": { "$ref": "schema.RunLocator" },
+          "output": { "$ref": "schema.ValidationReport" },
+          "errors": ["E_SCRIPT_FAILURE"],
+          "pre": ["locator.run_id != ''"],
+          "post": ["report.status in ['ok','error']"]
+        }
+      ],
+      "invariants": [
+        "Scripts executed with dry-run flag during validation",
+        "Stdout/stderr captured for stage artifact links"
+      ]
     }
   ],
   "edges": [
-    { "from": "cli", "to": "orchestrator", "contract": "Orchestrator.run" },
-    { "from": "orchestrator", "to": "reporter", "contract": "Reporter.publish" },
-    { "from": "orchestrator", "to": "telemetry", "contract": "Telemetry.record" }
+    { "from": "ui.console_shell", "to": "ui.workflow_surface", "contract": "WorkflowSurface.render" },
+    { "from": "ui.console_shell", "to": "ui.config_panel", "contract": "ConfigPanel.loadDraft" },
+    { "from": "ui.console_shell", "to": "service.session_facade", "contract": "SessionFacade.getSnapshot" },
+    { "from": "ui.workflow_surface", "to": "service.session_facade", "contract": "SessionFacade.getSnapshot" },
+    { "from": "ui.config_panel", "to": "service.session_facade", "contract": "SessionFacade.saveConfig" },
+    { "from": "ui.config_panel", "to": "ui.codex_assist", "contract": "CodexAssist.requestDraft" },
+    { "from": "ui.codex_assist", "to": "service.codex_proxy", "contract": "CodexProxy.invoke" },
+    { "from": "service.session_facade", "to": "service.run_orchestrator", "contract": "RunOrchestrator.fetchSnapshot" },
+    { "from": "service.session_facade", "to": "service.run_orchestrator", "contract": "RunOrchestrator.applyConfig" },
+    { "from": "service.session_facade", "to": "service.run_orchestrator", "contract": "RunOrchestrator.start" },
+    { "from": "service.session_facade", "to": "service.history_store", "contract": "HistoryStore.listRuns" },
+    { "from": "service.session_facade", "to": "service.history_store", "contract": "HistoryStore.persistRun" },
+    { "from": "service.session_facade", "to": "service.authz_guard", "contract": "AuthzGuard.verifyAccess" },
+    { "from": "service.run_orchestrator", "to": "integration.cli_bridge", "contract": "CliBridge.triggerScript" }
   ],
   "schemas_ref": "schemas.json"
 }

@@ -1,54 +1,440 @@
 {
   "modules": [
     {
-      "id": "cli",
-      "purpose": "Collect flags and orchestrate run",
+      "id": "ui.shell",
+      "purpose": "Compose workflow console layout, coordinate data subscriptions, and enforce access policies for operators.",
       "interfaces": [
         {
-          "name": "CLI.plan",
-          "input": { "$ref": "#/definitions/CLIArgs" },
-          "output": { "$ref": "#/definitions/RunPlan" },
-          "errors": ["E_PARSE", "E_CONFIG"],
-          "pre": ["argv.length >= 1"],
-          "post": ["output.steps.length > 0"]
+          "name": "Shell.mount",
+          "input": {
+            "$ref": "schema.ShellMountContext"
+          },
+          "output": {
+            "$ref": "schema.ShellMountResult"
+          },
+          "errors": [
+            "E_UNAUTHORIZED",
+            "E_MOUNT_FAIL"
+          ],
+          "pre": [
+            "context.operator_roles contains 'bo4_operator'"
+          ],
+          "post": [
+            "result.session_token != null",
+            "result.layout_regions == ['workflow','configuration','assistant','history']"
+          ]
+        },
+        {
+          "name": "Shell.routeUpdate",
+          "input": {
+            "$ref": "schema.RouteChange"
+          },
+          "output": {
+            "$ref": "schema.RouteAcknowledge"
+          },
+          "errors": [
+            "E_ROUTE_DENIED",
+            "E_DIRTY_STATE"
+          ],
+          "pre": [
+            "change.path in ['dashboard','configure','history','assist']"
+          ],
+          "post": [
+            "ack.state_persisted == true"
+          ]
         }
       ],
-      "invariants": ["CLI.plan is deterministic"]
+      "invariants": [
+        "Only one active run context per mounted shell",
+        "Route updates require persisted configuration state when leaving configure view"
+      ]
     },
     {
-      "id": "planner",
-      "purpose": "Validate requirements and assemble run plan",
+      "id": "ui.workflow_surface",
+      "purpose": "Render AMR \u2192 Bo4 workflow timeline, visualize stage dependencies, and surface artifact links with live status.",
       "interfaces": [
         {
-          "name": "Planner.vet",
-          "input": { "$ref": "#/definitions/RunPlan" },
-          "output": { "$ref": "#/definitions/RunSummary" },
-          "errors": ["E_REQ_UNCOVERED"],
-          "pre": ["input.steps.length > 0"],
-          "post": ["result.coverage >= 0.75"]
+          "name": "WorkflowSurface.render",
+          "input": {
+            "$ref": "schema.WorkflowSnapshot"
+          },
+          "output": {
+            "$ref": "schema.RenderResult"
+          },
+          "errors": [
+            "E_LAYOUT",
+            "E_DATA_STALE"
+          ],
+          "pre": [
+            "snapshot.stages.length >= 4",
+            "snapshot.timeline_id != null"
+          ],
+          "post": [
+            "result.sections == snapshot.stages.length",
+            "result.status_latency_ms <= 2000"
+          ]
         }
       ],
-      "invariants": ["Planner.vet enforces coverage threshold"]
+      "invariants": [
+        "Stage swimlanes stay ordered AMR\u2192Synthesis\u2192Review\u2192Bo4",
+        "Artifact links resolve to current run manifest"
+      ]
     },
     {
-      "id": "reporter",
-      "purpose": "Persist report.json and events.ndjson",
+      "id": "ui.configuration_panel",
+      "purpose": "Provide pre-flight controls for variant counts, brief depth, reviewer bots, and follow-up policy before run kickoff.",
       "interfaces": [
         {
-          "name": "Reporter.emit",
-          "input": { "$ref": "#/definitions/RunSummary" },
-          "output": { "$ref": "#/definitions/Artifacts" },
-          "errors": ["E_IO"],
-          "pre": ["input.coverage >= 0.75"],
-          "post": ["fs.exists(output.report)"]
+          "name": "ConfigurationPanel.collectInput",
+          "input": {
+            "$ref": "schema.ConfigurationDraft"
+          },
+          "output": {
+            "$ref": "schema.ConfigurationValidation"
+          },
+          "errors": [
+            "E_INVALID_FIELD",
+            "E_STALE_BASELINE"
+          ],
+          "pre": [
+            "draft.variant_count >= 1",
+            "draft.follow_up_policy in ['strict','flex','off']"
+          ],
+          "post": [
+            "validation.is_valid implies validation.applied == true",
+            "validation.persisted_at != null"
+          ]
+        },
+        {
+          "name": "ConfigurationPanel.submit",
+          "input": {
+            "$ref": "schema.RunKickoffRequest"
+          },
+          "output": {
+            "$ref": "schema.RunKickoffReceipt"
+          },
+          "errors": [
+            "E_LOCKED",
+            "E_SCHEDULER_BUSY"
+          ],
+          "pre": [
+            "request.configuration_id != null",
+            "request.status == 'ready'"
+          ],
+          "post": [
+            "receipt.run_id != null",
+            "receipt.scheduler_state == 'queued'"
+          ]
         }
       ],
-      "invariants": ["Reporter.emit writes both report and events"]
+      "invariants": [
+        "Validated configuration snapshot cached until run start",
+        "Kickoff disabled when scheduler lock present"
+      ]
+    },
+    {
+      "id": "ui.codex_assist",
+      "purpose": "Embed Codex drafting assistance for briefs, requirements, and slate notes with inline validation feedback.",
+      "interfaces": [
+        {
+          "name": "CodexAssist.compose",
+          "input": {
+            "$ref": "schema.CodexPrompt"
+          },
+          "output": {
+            "$ref": "schema.CodexDraft"
+          },
+          "errors": [
+            "E_CODEX_TIMEOUT",
+            "E_CONTENT_FILTER",
+            "E_CONTEXT_MISSING"
+          ],
+          "pre": [
+            "prompt.context_links all resolve"
+          ],
+          "post": [
+            "draft.validation.state in ['draft','accepted','needs_revision']"
+          ]
+        },
+        {
+          "name": "CodexAssist.publishNote",
+          "input": {
+            "$ref": "schema.SlateNote"
+          },
+          "output": {
+            "$ref": "schema.NotePublishResult"
+          },
+          "errors": [
+            "E_VALIDATION_FAIL",
+            "E_PERSISTENCE_FAIL"
+          ],
+          "pre": [
+            "note.category in ['brief','requirement','annotation']"
+          ],
+          "post": [
+            "result.persisted == true",
+            "result.visible_to contains note.visibility"
+          ]
+        }
+      ],
+      "invariants": [
+        "All Codex outputs run through policy filter before publishing",
+        "Assistant maintains prompt audit trail per run"
+      ]
+    },
+    {
+      "id": "service.run_controller",
+      "purpose": "Coordinate AMR \u2192 Bo4 workflow execution, subscribe to CLI adapters, and broadcast timeline snapshots to UI.",
+      "interfaces": [
+        {
+          "name": "RunController.subscribe",
+          "input": {
+            "$ref": "schema.RunSubscription"
+          },
+          "output": {
+            "$ref": "schema.SubscriptionResult"
+          },
+          "errors": [
+            "E_RUN_NOT_FOUND",
+            "E_PERMISSION"
+          ],
+          "pre": [
+            "subscription.operator_id != null"
+          ],
+          "post": [
+            "result.channel_active == true"
+          ]
+        },
+        {
+          "name": "RunController.updateState",
+          "input": {
+            "$ref": "schema.RunStateEvent"
+          },
+          "output": {
+            "$ref": "schema.WorkflowSnapshot"
+          },
+          "errors": [
+            "E_STATE_REJECTED",
+            "E_SEQUENCE_GAP"
+          ],
+          "pre": [
+            "event.stage_index >= 0",
+            "event.run_id != null"
+          ],
+          "post": [
+            "snapshot.version == event.version",
+            "snapshot.stages[event.stage_index].status == event.status"
+          ]
+        }
+      ],
+      "invariants": [
+        "Run state machine respects AMR gating rules",
+        "State updates ordered by monotonic version"
+      ]
+    },
+    {
+      "id": "service.history_store",
+      "purpose": "Persist configuration drafts, run manifests, and replay metadata for operators.",
+      "interfaces": [
+        {
+          "name": "HistoryStore.saveConfiguration",
+          "input": {
+            "$ref": "schema.ConfigurationSnapshot"
+          },
+          "output": {
+            "$ref": "schema.PersistenceAck"
+          },
+          "errors": [
+            "E_WRITE_FAIL",
+            "E_VERSION_CONFLICT"
+          ],
+          "pre": [
+            "snapshot.configuration_id != null"
+          ],
+          "post": [
+            "ack.version == snapshot.version"
+          ]
+        },
+        {
+          "name": "HistoryStore.loadRunHistory",
+          "input": {
+            "$ref": "schema.HistoryQuery"
+          },
+          "output": {
+            "$ref": "schema.RunHistory"
+          },
+          "errors": [
+            "E_NOT_FOUND",
+            "E_ACCESS_DENIED"
+          ],
+          "pre": [
+            "query.operator_id != null"
+          ],
+          "post": [
+            "history.records.length <= query.limit"
+          ]
+        }
+      ],
+      "invariants": [
+        "Historical records immutable after seal",
+        "Replay requests log audit trail"
+      ]
+    },
+    {
+      "id": "service.codex_gateway",
+      "purpose": "Proxy Codex API requests with policy enforcement, caching, and rate limiting.",
+      "interfaces": [
+        {
+          "name": "CodexGateway.invoke",
+          "input": {
+            "$ref": "schema.CodexCall"
+          },
+          "output": {
+            "$ref": "schema.CodexDraft"
+          },
+          "errors": [
+            "E_RATE_LIMIT",
+            "E_REMOTE_FAIL",
+            "E_POLICY_BLOCK"
+          ],
+          "pre": [
+            "call.prompt.tokens <= call.limits.max_tokens"
+          ],
+          "post": [
+            "draft.metadata.trace_id == call.trace_id"
+          ]
+        }
+      ],
+      "invariants": [
+        "All Codex calls logged with deterministic trace id",
+        "Rate limiter enforces <= 3 calls/min per operator"
+      ]
+    },
+    {
+      "id": "integration.cli_adapter",
+      "purpose": "Bridge UI orchestration with existing CLI scripts (tm.mjs, scripts/rcm-ssd-check.mjs) for run execution.",
+      "interfaces": [
+        {
+          "name": "CliAdapter.trigger",
+          "input": {
+            "$ref": "schema.CliTrigger"
+          },
+          "output": {
+            "$ref": "schema.CliTriggerResult"
+          },
+          "errors": [
+            "E_SCRIPT_FAIL",
+            "E_ENV_MISSING",
+            "E_TIMEOUT"
+          ],
+          "pre": [
+            "trigger.script in ['tm.mjs','scripts/rcm-ssd-check.mjs']"
+          ],
+          "post": [
+            "result.exit_code == 0 implies result.artifacts_generated == true"
+          ]
+        },
+        {
+          "name": "CliAdapter.collectArtifacts",
+          "input": {
+            "$ref": "schema.CliArtifactRequest"
+          },
+          "output": {
+            "$ref": "schema.CliArtifactBundle"
+          },
+          "errors": [
+            "E_ARTIFACT_MISSING",
+            "E_ACCESS_DENIED"
+          ],
+          "pre": [
+            "request.run_id != null"
+          ],
+          "post": [
+            "bundle.manifest_version >= request.expected_version"
+          ]
+        },
+        {
+          "name": "CLI.status",
+          "input": {
+            "$ref": "schema.CliTrigger"
+          },
+          "output": {
+            "$ref": "schema.CliTriggerResult"
+          },
+          "errors": [
+            "E_SCRIPT_FAIL",
+            "E_TIMEOUT"
+          ],
+          "pre": [
+            "trigger.script != null"
+          ],
+          "post": [
+            "result.exit_code in [0,1]"
+          ]
+        }
+      ],
+      "invariants": [
+        "Scripts executed in sandboxed runtime",
+        "Adapter normalizes CLI output to structured manifests"
+      ]
     }
   ],
   "edges": [
-    { "from": "cli", "to": "planner", "contract": "Planner.vet" },
-    { "from": "planner", "to": "reporter", "contract": "Reporter.emit" }
+    {
+      "from": "ui.shell",
+      "to": "service.run_controller",
+      "contract": "RunController.subscribe"
+    },
+    {
+      "from": "ui.shell",
+      "to": "service.history_store",
+      "contract": "HistoryStore.loadRunHistory"
+    },
+    {
+      "from": "ui.workflow_surface",
+      "to": "service.run_controller",
+      "contract": "RunController.updateState"
+    },
+    {
+      "from": "ui.configuration_panel",
+      "to": "service.run_controller",
+      "contract": "RunController.subscribe"
+    },
+    {
+      "from": "ui.configuration_panel",
+      "to": "service.history_store",
+      "contract": "HistoryStore.saveConfiguration"
+    },
+    {
+      "from": "ui.configuration_panel",
+      "to": "integration.cli_adapter",
+      "contract": "CliAdapter.trigger"
+    },
+    {
+      "from": "ui.codex_assist",
+      "to": "service.codex_gateway",
+      "contract": "CodexGateway.invoke"
+    },
+    {
+      "from": "ui.codex_assist",
+      "to": "service.history_store",
+      "contract": "HistoryStore.saveConfiguration"
+    },
+    {
+      "from": "service.run_controller",
+      "to": "integration.cli_adapter",
+      "contract": "CliAdapter.collectArtifacts"
+    },
+    {
+      "from": "service.run_controller",
+      "to": "service.history_store",
+      "contract": "HistoryStore.saveConfiguration"
+    },
+    {
+      "from": "service.codex_gateway",
+      "to": "service.history_store",
+      "contract": "HistoryStore.saveConfiguration"
+    }
   ],
   "schemas_ref": "schemas.json"
 }

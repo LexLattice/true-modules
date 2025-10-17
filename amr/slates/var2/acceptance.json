@@ -1,17 +1,43 @@
 {
-  "T-020": {
-    "req": "REQ-1.1",
-    "oracle": "report.json",
+  "T-UI-01": {
+    "req": "REQ-UI-1",
+    "oracle": "captures/workflow-snapshot.png",
     "steps": [
-      { "action": "compose_plan", "assert": "coverage>=0.75" },
-      { "action": "emit_report", "assert": "file_exists:report.json" }
+      { "action": "seed_run_state", "args": { "run_id": "run-001", "stages": ["AMR Intake", "Synthesis", "Review", "Bo4 Publish"] } },
+      { "action": "open_console", "args": { "route": "dashboard" }, "assert": "stage_lane_count == 4" },
+      { "action": "simulate_state_push", "args": { "stage": "Synthesis", "status": "running" }, "assert": "lane('Synthesis').status == 'running'" },
+      { "action": "follow_artifact_link", "args": { "stage": "Bo4 Publish", "artifact": "brief.pdf" }, "assert": "artifact_view.uri_valid == true" }
     ]
   },
-  "T-021": {
-    "req": "REQ-1.2",
-    "oracle": "console",
+  "T-UI-02": {
+    "req": "REQ-UI-2",
+    "oracle": "logs/configuration-apply.json",
     "steps": [
-      { "action": "run_cli", "args": ["--dry-run"], "assert": "stdout_contains:Dry run mode enabled" }
+      { "action": "open_console", "args": { "route": "configure" } },
+      { "action": "set_configuration_field", "args": { "field": "variant_count", "value": 3 }, "assert": "form.variant_count == 3" },
+      { "action": "toggle_follow_up_policy", "args": { "mode": "strict" }, "assert": "form.follow_up_policy == 'strict'" },
+      { "action": "assign_reviewer_bot", "args": { "bot_id": "reviewer-beta" }, "assert": "form.reviewer_bots contains 'reviewer-beta'" },
+      { "action": "submit_configuration", "args": { "status": "ready" }, "assert": "kickoff_receipt.scheduler_state == 'queued'" }
+    ]
+  },
+  "T-UI-03": {
+    "req": "REQ-UI-3",
+    "oracle": "logs/codex-assist-trace.json",
+    "steps": [
+      { "action": "open_console", "args": { "route": "assist" } },
+      { "action": "author_brief_with_codex", "args": { "prompt": "Draft AMR brief for Bo4", "links": ["rcm://requirements/REQ-UI-1"] }, "assert": "draft.validation.state in ['draft','accepted']" },
+      { "action": "inject_policy_violation", "args": { "content": "disallowed" }, "assert": "error_code == 'E_CONTENT_FILTER'" },
+      { "action": "publish_note", "args": { "category": "brief", "visibility": ["designers"] }, "assert": "note.persisted == true" }
+    ]
+  },
+  "T-UI-04": {
+    "req": "REQ-UI-4",
+    "oracle": "logs/history-replay.json",
+    "steps": [
+      { "action": "seed_run_history", "args": { "operator_id": "alice", "history": ["run-001"] } },
+      { "action": "open_console", "args": { "route": "history" }, "assert": "history.list contains 'run-001'" },
+      { "action": "replay_run", "args": { "run_id": "run-001" }, "assert": "workflow_snapshot.version == history.last_version" },
+      { "action": "export_run_manifest", "args": { "run_id": "run-001" }, "assert": "export.status == 'success'" }
     ]
   }
 }

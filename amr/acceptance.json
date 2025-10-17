@@ -1,0 +1,43 @@
+{
+  "T-UI-01": {
+    "req": "REQ-UI-1",
+    "oracle": "artifacts/ui/workflow-swimlanes.png",
+    "steps": [
+      { "action": "seed_run_state", "args": { "runId": "bo4-demo-001", "stages": ["amr_prepare", "amr_merge", "implementation", "review", "bo4_commit"] }, "assert": "seed.success == true" },
+      { "action": "open_console", "args": { "user": "operator-amy", "view": "workflow" }, "assert": "workflow_surface.stageCount == 5" },
+      { "action": "simulate_stage_update", "args": { "runId": "bo4-demo-001", "stage": "implementation", "status": "running" }, "assert": "stage('implementation').status == 'running'" },
+      { "action": "inspect_artifact", "args": { "runId": "bo4-demo-001", "stage": "amr_merge", "artifactId": "amr/architecture.json" }, "assert": "artifact_view.uri_valid == true" }
+    ]
+  },
+  "T-UI-02": {
+    "req": "REQ-UI-2",
+    "oracle": "artifacts/ui/config-submit.json",
+    "steps": [
+      { "action": "load_run_configurator", "args": { "templateVersion": "2025.10" }, "assert": "form.fields.variantCount.default >= 1" },
+      { "action": "set_config_field", "args": { "field": "variantCount", "value": 3 }, "assert": "form.values.variantCount == 3" },
+      { "action": "set_config_field", "args": { "field": "followUpPolicy", "value": "auto" }, "assert": "form.values.followUpPolicy == 'auto'" },
+      { "action": "assign_reviewer_bot", "args": { "botId": "reviewer-gemini" }, "assert": "form.values.reviewerBots contains 'reviewer-gemini'" },
+      { "action": "submit_configuration", "assert": "submission.valid == true && submission.manifestRef != null" }
+    ]
+  },
+  "T-UI-03": {
+    "req": "REQ-UI-3",
+    "oracle": "artifacts/ui/codex-inline.md",
+    "steps": [
+      { "action": "open_codex_composer", "args": { "channel": "briefs" }, "assert": "composer.visible == true" },
+      { "action": "request_codex_assistance", "args": { "intent": "draft_brief", "contextTokens": 1500 }, "assert": "suggestions.count >= 1" },
+      { "action": "inject_policy_violation", "args": { "content": "disallowed phrase" }, "assert": "composer.lastError.code == 'E_POLICY_BLOCK'" },
+      { "action": "accept_suggestion", "args": { "suggestionId": "sg-001" }, "assert": "draft.persisted == true" }
+    ]
+  },
+  "T-UI-04": {
+    "req": "REQ-UI-4",
+    "oracle": "artifacts/ui/history-replay.json",
+    "steps": [
+      { "action": "record_run_history", "args": { "runId": "bo4-demo-042", "status": "complete" }, "assert": "history_store.appendRun.saved == true" },
+      { "action": "open_history_timeline", "args": { "user": "operator-amy" }, "assert": "history_view.entries.filter(e => e.runId=='bo4-demo-042').length == 1" },
+      { "action": "replay_run", "args": { "runId": "bo4-demo-042" }, "assert": "replayAck.started == true && replayAck.mode == 'replay'" },
+      { "action": "export_replay_bundle", "args": { "runId": "bo4-demo-042" }, "assert": "export.status == 'accepted'" }
+    ]
+  }
+}

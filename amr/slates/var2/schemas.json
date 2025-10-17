@@ -1,41 +1,351 @@
 {
-  "$id": "amr/slates/var2/schemas.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "schemas.json",
   "definitions": {
-    "CLIArgs": {
+    "ShellMountContext": {
+      "$id": "schema.ShellMountContext",
       "type": "object",
+      "required": ["operator_id", "operator_roles", "session_nonce"],
       "properties": {
-        "argv": { "type": "array", "items": { "type": "string" } },
-        "cwd": { "type": "string" }
-      },
-      "required": ["argv"],
-      "additionalProperties": false
+        "operator_id": { "type": "string" },
+        "operator_roles": { "type": "array", "items": { "type": "string" } },
+        "session_nonce": { "type": "string" },
+        "preferred_workspace": { "type": "string" }
+      }
     },
-    "RunPlan": {
+    "ShellMountResult": {
+      "$id": "schema.ShellMountResult",
       "type": "object",
+      "required": ["session_token", "layout_regions", "default_route"],
       "properties": {
-        "steps": { "type": "array", "items": { "type": "string" } },
-        "requirements": { "type": "array", "items": { "type": "string" } }
-      },
-      "required": ["steps", "requirements"],
-      "additionalProperties": false
+        "session_token": { "type": "string" },
+        "layout_regions": { "type": "array", "items": { "type": "string" } },
+        "default_route": { "type": "string" }
+      }
     },
-    "RunSummary": {
+    "RouteChange": {
+      "$id": "schema.RouteChange",
       "type": "object",
+      "required": ["path", "dirty_state"],
       "properties": {
-        "coverage": { "type": "number", "minimum": 0, "maximum": 1 },
-        "artifacts": { "$ref": "#/definitions/Artifacts" }
-      },
-      "required": ["coverage", "artifacts"],
-      "additionalProperties": false
+        "path": { "type": "string" },
+        "dirty_state": { "type": "boolean" }
+      }
     },
-    "Artifacts": {
+    "RouteAcknowledge": {
+      "$id": "schema.RouteAcknowledge",
       "type": "object",
+      "required": ["state_persisted", "active_path"],
       "properties": {
-        "report": { "type": "string" },
-        "events": { "type": "string" }
-      },
-      "required": ["report", "events"],
-      "additionalProperties": false
+        "state_persisted": { "type": "boolean" },
+        "active_path": { "type": "string" }
+      }
+    },
+    "WorkflowSnapshot": {
+      "$id": "schema.WorkflowSnapshot",
+      "type": "object",
+      "required": ["run_id", "timeline_id", "version", "stages"],
+      "properties": {
+        "run_id": { "type": "string" },
+        "timeline_id": { "type": "string" },
+        "version": { "type": "integer", "minimum": 0 },
+        "stages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["stage_id", "name", "status", "dependencies", "artifacts"],
+            "properties": {
+              "stage_id": { "type": "string" },
+              "name": { "type": "string" },
+              "status": { "type": "string", "enum": ["pending", "ready", "running", "blocked", "done", "failed"] },
+              "dependencies": { "type": "array", "items": { "type": "string" } },
+              "artifacts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["label", "uri"],
+                  "properties": {
+                    "label": { "type": "string" },
+                    "uri": { "type": "string", "format": "uri" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "RenderResult": {
+      "$id": "schema.RenderResult",
+      "type": "object",
+      "required": ["sections", "status_latency_ms"],
+      "properties": {
+        "sections": { "type": "integer", "minimum": 0 },
+        "status_latency_ms": { "type": "integer", "minimum": 0 },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "ConfigurationDraft": {
+      "$id": "schema.ConfigurationDraft",
+      "type": "object",
+      "required": ["variant_count", "brief_depth", "follow_up_policy", "reviewer_bots"],
+      "properties": {
+        "variant_count": { "type": "integer", "minimum": 1 },
+        "brief_depth": { "type": "string", "enum": ["summary", "detailed", "full"] },
+        "follow_up_policy": { "type": "string", "enum": ["strict", "flex", "off"] },
+        "reviewer_bots": { "type": "array", "items": { "type": "string" } },
+        "baseline_configuration_id": { "type": "string" }
+      }
+    },
+    "ConfigurationValidation": {
+      "$id": "schema.ConfigurationValidation",
+      "type": "object",
+      "required": ["is_valid", "applied", "persisted_at"],
+      "properties": {
+        "is_valid": { "type": "boolean" },
+        "applied": { "type": "boolean" },
+        "persisted_at": { "type": "string", "format": "date-time" },
+        "errors": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "RunKickoffRequest": {
+      "$id": "schema.RunKickoffRequest",
+      "type": "object",
+      "required": ["configuration_id", "status"],
+      "properties": {
+        "configuration_id": { "type": "string" },
+        "status": { "type": "string", "enum": ["draft", "ready", "submitted"] },
+        "requested_start": { "type": "string", "format": "date-time" }
+      }
+    },
+    "RunKickoffReceipt": {
+      "$id": "schema.RunKickoffReceipt",
+      "type": "object",
+      "required": ["run_id", "scheduler_state", "accepted_at"],
+      "properties": {
+        "run_id": { "type": "string" },
+        "scheduler_state": { "type": "string", "enum": ["queued", "in-flight", "rejected"] },
+        "accepted_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "CodexPrompt": {
+      "$id": "schema.CodexPrompt",
+      "type": "object",
+      "required": ["operator_id", "context_links", "prompt"],
+      "properties": {
+        "operator_id": { "type": "string" },
+        "context_links": { "type": "array", "items": { "type": "string", "format": "uri" } },
+        "prompt": { "type": "string" },
+        "desired_format": { "type": "string" }
+      }
+    },
+    "CodexDraft": {
+      "$id": "schema.CodexDraft",
+      "type": "object",
+      "required": ["content", "validation", "metadata"],
+      "properties": {
+        "content": { "type": "string" },
+        "validation": {
+          "type": "object",
+          "required": ["state"],
+          "properties": {
+            "state": { "type": "string", "enum": ["draft", "accepted", "needs_revision"] },
+            "messages": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "required": ["trace_id"],
+          "properties": {
+            "trace_id": { "type": "string" },
+            "model": { "type": "string" }
+          }
+        }
+      }
+    },
+    "SlateNote": {
+      "$id": "schema.SlateNote",
+      "type": "object",
+      "required": ["run_id", "category", "content", "visibility"],
+      "properties": {
+        "run_id": { "type": "string" },
+        "category": { "type": "string", "enum": ["brief", "requirement", "annotation"] },
+        "content": { "type": "string" },
+        "visibility": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "NotePublishResult": {
+      "$id": "schema.NotePublishResult",
+      "type": "object",
+      "required": ["persisted", "visible_to", "note_id"],
+      "properties": {
+        "persisted": { "type": "boolean" },
+        "visible_to": { "type": "array", "items": { "type": "string" } },
+        "note_id": { "type": "string" }
+      }
+    },
+    "RunSubscription": {
+      "$id": "schema.RunSubscription",
+      "type": "object",
+      "required": ["operator_id", "run_id", "channel"],
+      "properties": {
+        "operator_id": { "type": "string" },
+        "run_id": { "type": "string" },
+        "channel": { "type": "string" }
+      }
+    },
+    "SubscriptionResult": {
+      "$id": "schema.SubscriptionResult",
+      "type": "object",
+      "required": ["channel_active", "subscription_id"],
+      "properties": {
+        "channel_active": { "type": "boolean" },
+        "subscription_id": { "type": "string" }
+      }
+    },
+    "RunStateEvent": {
+      "$id": "schema.RunStateEvent",
+      "type": "object",
+      "required": ["run_id", "stage", "stage_index", "status", "version"],
+      "properties": {
+        "run_id": { "type": "string" },
+        "stage": { "type": "string" },
+        "stage_index": { "type": "integer", "minimum": 0 },
+        "status": { "type": "string" },
+        "version": { "type": "integer", "minimum": 0 },
+        "artifact_refs": { "type": "array", "items": { "type": "string", "format": "uri" } }
+      }
+    },
+    "WorkflowSnapshotUpdate": {
+      "$id": "schema.WorkflowSnapshotUpdate",
+      "type": "object",
+      "required": ["snapshot"],
+      "properties": {
+        "snapshot": { "$ref": "schema.WorkflowSnapshot" }
+      }
+    },
+    "ConfigurationSnapshot": {
+      "$id": "schema.ConfigurationSnapshot",
+      "type": "object",
+      "required": ["configuration_id", "version", "payload"],
+      "properties": {
+        "configuration_id": { "type": "string" },
+        "version": { "type": "integer", "minimum": 0 },
+        "payload": { "$ref": "schema.ConfigurationDraft" }
+      }
+    },
+    "PersistenceAck": {
+      "$id": "schema.PersistenceAck",
+      "type": "object",
+      "required": ["version", "persisted"],
+      "properties": {
+        "version": { "type": "integer", "minimum": 0 },
+        "persisted": { "type": "boolean" },
+        "errors": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "HistoryQuery": {
+      "$id": "schema.HistoryQuery",
+      "type": "object",
+      "required": ["operator_id", "limit"],
+      "properties": {
+        "operator_id": { "type": "string" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 50 },
+        "filters": { "type": "object" }
+      }
+    },
+    "RunHistory": {
+      "$id": "schema.RunHistory",
+      "type": "object",
+      "required": ["records"],
+      "properties": {
+        "records": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["run_id", "started_at", "configuration_id", "status"],
+            "properties": {
+              "run_id": { "type": "string" },
+              "started_at": { "type": "string", "format": "date-time" },
+              "configuration_id": { "type": "string" },
+              "status": { "type": "string" },
+              "artifacts": { "type": "array", "items": { "type": "string", "format": "uri" } }
+            }
+          }
+        }
+      }
+    },
+    "CodexCall": {
+      "$id": "schema.CodexCall",
+      "type": "object",
+      "required": ["prompt", "limits", "trace_id"],
+      "properties": {
+        "prompt": {
+          "type": "object",
+          "required": ["tokens"],
+          "properties": {
+            "tokens": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "required": ["max_tokens"],
+          "properties": {
+            "max_tokens": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "trace_id": { "type": "string" },
+        "payload": { "$ref": "schema.CodexPrompt" }
+      }
+    },
+    "CliTrigger": {
+      "$id": "schema.CliTrigger",
+      "type": "object",
+      "required": ["script", "args", "configuration_id"],
+      "properties": {
+        "script": { "type": "string" },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "configuration_id": { "type": "string" }
+      }
+    },
+    "CliTriggerResult": {
+      "$id": "schema.CliTriggerResult",
+      "type": "object",
+      "required": ["exit_code", "artifacts_generated", "log_reference"],
+      "properties": {
+        "exit_code": { "type": "integer" },
+        "artifacts_generated": { "type": "boolean" },
+        "log_reference": { "type": "string" }
+      }
+    },
+    "CliArtifactRequest": {
+      "$id": "schema.CliArtifactRequest",
+      "type": "object",
+      "required": ["run_id", "expected_version"],
+      "properties": {
+        "run_id": { "type": "string" },
+        "expected_version": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "CliArtifactBundle": {
+      "$id": "schema.CliArtifactBundle",
+      "type": "object",
+      "required": ["run_id", "manifest_version", "artifacts"],
+      "properties": {
+        "run_id": { "type": "string" },
+        "manifest_version": { "type": "integer", "minimum": 0 },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "uri"],
+            "properties": {
+              "name": { "type": "string" },
+              "uri": { "type": "string", "format": "uri" }
+            }
+          }
+        }
+      }
     }
   }
 }

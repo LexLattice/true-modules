@@ -1,0 +1,449 @@
+{
+  "modules": [
+    {
+      "id": "ui.shell",
+      "purpose": "Owns the workflow console layout, hydrates session context, and routes operator intents across visualization, configuration, Codex, and history panes.",
+      "interfaces": [
+        {
+          "name": "Shell.load",
+          "input": { "$ref": "schema.ShellLoadRequest" },
+          "output": { "$ref": "schema.ShellLoadResponse" },
+          "errors": ["E_UNAUTH", "E_STATE_UNAVAILABLE"],
+          "pre": [
+            "request.user.role in ['operator','observer','admin']"
+          ],
+          "post": [
+            "response.activePanels >= 2",
+            "response.nav.items != []"
+          ]
+        },
+        {
+          "name": "Shell.routeEvent",
+          "input": { "$ref": "schema.UIEvent" },
+          "output": { "$ref": "schema.UIRouteAck" },
+          "errors": ["E_EVENT_REJECTED", "E_THROTTLED"],
+          "pre": [
+            "event.source in ['workflow','configuration','codex','history']"
+          ],
+          "post": [
+            "ack.accepted implies event.forwarded_to != null"
+          ]
+        }
+      ],
+      "invariants": [
+        "Session context refreshed via SessionFacade before handing events to child panes",
+        "RBAC prevents kickoff commands unless user has 'bo4:run'"
+      ]
+    },
+    {
+      "id": "ui.workflow_surface",
+      "purpose": "Visualizes AMR → Bo4 workflow stages, dependencies, and artifacts with live status updates (REQ-UI-1).",
+      "interfaces": [
+        {
+          "name": "WorkflowSurface.render",
+          "input": { "$ref": "schema.WorkflowSnapshot" },
+          "output": { "$ref": "schema.RenderResult" },
+          "errors": ["E_LAYOUT", "E_DATA_STALE"],
+          "pre": [
+            "snapshot.stages.length >= 4"
+          ],
+          "post": [
+            "result.sections == snapshot.stages.length",
+            "result.lastUpdated == snapshot.generatedAt"
+          ]
+        },
+        {
+          "name": "WorkflowSurface.inspectArtifact",
+          "input": { "$ref": "schema.ArtifactRef" },
+          "output": { "$ref": "schema.ArtifactView" },
+          "errors": ["E_ARTIFACT_MISSING", "E_PERMISSION"],
+          "pre": [
+            "ref.stageId in snapshot.stageIds"
+          ],
+          "post": [
+            "view.ref.artifactId == ref.artifactId"
+          ]
+        }
+      ],
+      "invariants": [
+        "Renders update within 2s of RunStateGateway snapshot emission",
+        "Highlights dependency blockers before enabling stage actions"
+      ]
+    },
+    {
+      "id": "ui.run_configurator",
+      "purpose": "Collects and validates run parameters (variant counts, brief depth, reviewer bots, follow-up policy) prior to kickoff (REQ-UI-2).",
+      "interfaces": [
+        {
+          "name": "RunConfigurator.loadTemplate",
+          "input": { "$ref": "schema.ConfigTemplate" },
+          "output": { "$ref": "schema.ConfigFormState" },
+          "errors": ["E_TEMPLATE_MISSING", "E_ROLE_FORBIDDEN"],
+          "pre": [
+            "template.version != null"
+          ],
+          "post": [
+            "state.fields.variantCount.default != null"
+          ]
+        },
+        {
+          "name": "RunConfigurator.submit",
+          "input": { "$ref": "schema.ConfigSubmission" },
+          "output": { "$ref": "schema.ConfigSubmissionResult" },
+          "errors": ["E_VALIDATION", "E_CONFLICT"],
+          "pre": [
+            "submission.variantCount > 0"
+          ],
+          "post": [
+            "result.valid implies result.manifestRef != null"
+          ]
+        }
+      ],
+      "invariants": [
+        "Blocks kickoff until CLIBridge.validateManifest reports status=='ok'",
+        "Caches last successful submission per operator for replay seeding (REQ-UI-4)"
+      ]
+    },
+    {
+      "id": "ui.codex_composer",
+      "purpose": "Embeds Codex drafting assistance for briefs, requirements, and slate notes with inline validation and policy guardrails (REQ-UI-3).",
+      "interfaces": [
+        {
+          "name": "CodexComposer.requestAssistance",
+          "input": { "$ref": "schema.CodexPrompt" },
+          "output": { "$ref": "schema.CodexSuggestionStream" },
+          "errors": ["E_CODEX", "E_INPUT_GUARD"],
+          "pre": [
+            "prompt.intent in ['draft_brief','draft_requirement','draft_note']"
+          ],
+          "post": [
+            "stream.suggestions.length >= 1"
+          ]
+        },
+        {
+          "name": "CodexComposer.publishDraft",
+          "input": { "$ref": "schema.CodexDraft" },
+          "output": { "$ref": "schema.DraftPublishAck" },
+          "errors": ["E_VALIDATION", "E_SYNC"],
+          "pre": [
+            "draft.channel in ['briefs','requirements','slate_notes']"
+          ],
+          "post": [
+            "ack.persisted == true implies ack.uri != null"
+          ]
+        }
+      ],
+      "invariants": [
+        "Sanitizes suggestions before render and logs rejected prompts with HistoryStore",
+        "Provides policy feedback within 5s even when Codex retries"
+      ]
+    },
+    {
+      "id": "ui.history_timeline",
+      "purpose": "Displays run history, supports replay/export actions, and coordinates state freezes while reviewing past sessions (REQ-UI-4).",
+      "interfaces": [
+        {
+          "name": "HistoryTimeline.render",
+          "input": { "$ref": "schema.HistoryList" },
+          "output": { "$ref": "schema.HistoryView" },
+          "errors": ["E_HISTORY_UNAVAILABLE", "E_PERMISSION"],
+          "pre": [
+            "list.items.length >= 0"
+          ],
+          "post": [
+            "view.entries.length == list.items.length"
+          ]
+        },
+        {
+          "name": "HistoryTimeline.replay",
+          "input": { "$ref": "schema.HistoryReplayRequest" },
+          "output": { "$ref": "schema.ReplayAck" },
+          "errors": ["E_STATE_CONFLICT", "E_RUN_NOT_FOUND"],
+          "pre": [
+            "request.runId != ''"
+          ],
+          "post": [
+            "ack.started implies ack.mode == 'replay'"
+          ]
+        }
+      ],
+      "invariants": [
+        "Freezes live RunState subscriptions while replay pane is active",
+        "Exports replay bundles with immutable manifest checksum"
+      ]
+    },
+    {
+      "id": "svc.session_facade",
+      "purpose": "Mediates secure access to run snapshots, configuration persistence, kickoff, and history retrieval for the console.",
+      "interfaces": [
+        {
+          "name": "SessionFacade.getSnapshot",
+          "input": { "$ref": "schema.RunIdentifier" },
+          "output": { "$ref": "schema.WorkflowSnapshot" },
+          "errors": ["E_ACCESS_DENIED", "E_SNAPSHOT_STALE"],
+          "pre": [
+            "identifier.runId != ''"
+          ],
+          "post": [
+            "snapshot.runId == identifier.runId"
+          ]
+        },
+        {
+          "name": "SessionFacade.saveConfig",
+          "input": { "$ref": "schema.ConfigSubmission" },
+          "output": { "$ref": "schema.ConfigSubmissionResult" },
+          "errors": ["E_ACCESS_DENIED", "E_CONFLICT"],
+          "pre": [
+            "submission.createdBy != ''"
+          ],
+          "post": [
+            "result.valid implies result.manifestRef != null"
+          ]
+        },
+        {
+          "name": "SessionFacade.startRun",
+          "input": { "$ref": "schema.RunIdentifier" },
+          "output": { "$ref": "schema.KickoffReceipt" },
+          "errors": ["E_STAGE_BLOCKED", "E_ORCHESTRATOR_DOWN"],
+          "pre": [
+            "identifier.actor.canView == true"
+          ],
+          "post": [
+            "receipt.runId == identifier.runId"
+          ]
+        },
+        {
+          "name": "SessionFacade.listHistory",
+          "input": { "$ref": "schema.SessionContext" },
+          "output": { "$ref": "schema.HistoryList" },
+          "errors": ["E_ACCESS_DENIED", "E_HISTORY_CORRUPT"],
+          "pre": [
+            "context.userId != ''"
+          ],
+          "post": [
+            "list.items.every(item => item.runId != '')"
+          ]
+        }
+      ],
+      "invariants": [
+        "Enforces AMR/Bo4 gating state machine before allowing kickoff",
+        "Caches history responses for <=300s while honoring RBAC scopes"
+      ]
+    },
+    {
+      "id": "svc.run_state_gateway",
+      "purpose": "Aggregates run manifests, CLI telemetry, and AMR/Bo4 stage transitions into snapshots consumable by the UI.",
+      "interfaces": [
+        {
+          "name": "RunStateGateway.fetchSnapshot",
+          "input": { "$ref": "schema.RunIdentifier" },
+          "output": { "$ref": "schema.WorkflowSnapshot" },
+          "errors": ["E_RUN_NOT_FOUND", "E_BACKEND_DOWN"],
+          "pre": [
+            "identifier.runId != ''"
+          ],
+          "post": [
+            "snapshot.runId == identifier.runId"
+          ]
+        },
+        {
+          "name": "RunStateGateway.subscribeUpdates",
+          "input": { "$ref": "schema.RunIdentifier" },
+          "output": { "$ref": "schema.WorkflowSnapshotStream" },
+          "errors": ["E_STREAM_TIMEOUT", "E_AUTHZ"],
+          "pre": [
+            "identifier.actor.canView == true"
+          ],
+          "post": [
+            "stream.interval_seconds <= 5"
+          ]
+        }
+      ],
+      "invariants": [
+        "Rejects snapshots older than 10s to keep visualization fresh",
+        "Normalizes dependency graphs before emission"
+      ]
+    },
+    {
+      "id": "svc.run_configuration",
+      "purpose": "Validates operator submissions, prepares launch manifests, and persists defaults for replay.",
+      "interfaces": [
+        {
+          "name": "RunConfigurationService.prepareManifest",
+          "input": { "$ref": "schema.ConfigSubmission" },
+          "output": { "$ref": "schema.RunManifest" },
+          "errors": ["E_SCHEMA", "E_LIMIT_EXCEEDED"],
+          "pre": [
+            "submission.variantCount <= serviceLimits.maxVariantCount"
+          ],
+          "post": [
+            "manifest.parameters.variantCount == submission.variantCount"
+          ]
+        },
+        {
+          "name": "RunConfigurationService.persistDefaults",
+          "input": { "$ref": "schema.ConfigSubmission" },
+          "output": { "$ref": "schema.PersistResult" },
+          "errors": ["E_STORAGE", "E_VERSION_SKEW"],
+          "pre": [
+            "submission.createdBy != ''"
+          ],
+          "post": [
+            "result.saved == true implies result.version != null"
+          ]
+        }
+      ],
+      "invariants": [
+        "Mirrors tm.mjs manifest schema during serialization",
+        "Enforces follow-up policy contract before kickoff"
+      ]
+    },
+    {
+      "id": "svc.codex_adapter",
+      "purpose": "Brokers Codex API usage with prompt templating, rate limiting, and policy enforcement for authoring workflows.",
+      "interfaces": [
+        {
+          "name": "CodexAdapter.generate",
+          "input": { "$ref": "schema.CodexPrompt" },
+          "output": { "$ref": "schema.CodexSuggestion" },
+          "errors": ["E_PROVIDER", "E_POLICY_BLOCK"],
+          "pre": [
+            "prompt.context.tokens <= 8000"
+          ],
+          "post": [
+            "suggestion.metadata.policyChecked == true"
+          ]
+        },
+        {
+          "name": "CodexAdapter.redact",
+          "input": { "$ref": "schema.CodexSuggestion" },
+          "output": { "$ref": "schema.CodexSuggestion" },
+          "errors": ["E_REDACT"],
+          "pre": [
+            "suggestion.content != null"
+          ],
+          "post": [
+            "result.content does not contain secret patterns"
+          ]
+        }
+      ],
+      "invariants": [
+        "Caches prompts per session for 60s to reduce latency",
+        "Drops provider responses that fail schema validation and logs them for audit"
+      ]
+    },
+    {
+      "id": "svc.history_store",
+      "purpose": "Persists configuration presets, run manifests, telemetry, and replay bundles for future sessions (REQ-UI-4).",
+      "interfaces": [
+        {
+          "name": "HistoryStore.appendRun",
+          "input": { "$ref": "schema.RunHistoryRecord" },
+          "output": { "$ref": "schema.HistoryReceipt" },
+          "errors": ["E_STORAGE", "E_DUPLICATE"],
+          "pre": [
+            "record.runId != ''"
+          ],
+          "post": [
+            "receipt.saved == true"
+          ]
+        },
+        {
+          "name": "HistoryStore.loadHistory",
+          "input": { "$ref": "schema.HistoryQuery" },
+          "output": { "$ref": "schema.HistoryList" },
+          "errors": ["E_PERMISSION", "E_NOT_FOUND"],
+          "pre": [
+            "query.userId != ''"
+          ],
+          "post": [
+            "list.items.every(item => item.runId != null)"
+          ]
+        },
+        {
+          "name": "HistoryStore.fetchTimeline",
+          "input": { "$ref": "schema.HistoryReplayRequest" },
+          "output": { "$ref": "schema.HistoryView" },
+          "errors": ["E_RUN_NOT_FOUND"],
+          "pre": [
+            "request.runId != ''"
+          ],
+          "post": [
+            "view.replayMode == request.mode"
+          ]
+        }
+      ],
+      "invariants": [
+        "Stores manifests versioned by tm.mjs commit hash",
+        "Encrypts reviewer bot assignments and Codex drafts at rest"
+      ]
+    },
+    {
+      "id": "svc.cli_bridge",
+      "purpose": "Invokes tm.mjs and supporting scripts to validate manifests, kickoff runs, and stream results back to orchestration services.",
+      "interfaces": [
+        {
+          "name": "CLIBridge.validateManifest",
+          "input": { "$ref": "schema.RunManifest" },
+          "output": { "$ref": "schema.ValidationReport" },
+          "errors": ["E_CLI_FAILURE", "E_TIMEOUT"],
+          "pre": [
+            "manifest.parameters.variantCount > 0"
+          ],
+          "post": [
+            "report.status in ['ok','error']"
+          ]
+        },
+        {
+          "name": "CLIBridge.kickoffRun",
+          "input": { "$ref": "schema.RunManifest" },
+          "output": { "$ref": "schema.KickoffReceipt" },
+          "errors": ["E_CLI_FAILURE", "E_CONFLICT"],
+          "pre": [
+            "manifest.readyForLaunch == true"
+          ],
+          "post": [
+            "receipt.runId == manifest.runId"
+          ]
+        },
+        {
+          "name": "CLI.status",
+          "input": { "$ref": "schema.RunIdentifier" },
+          "output": { "$ref": "schema.ValidationReport" },
+          "errors": ["E_CLI_FAILURE"],
+          "pre": [
+            "identifier.runId != ''"
+          ],
+          "post": [
+            "report.status in ['ok','error']"
+          ]
+        }
+      ],
+      "invariants": [
+        "Serializes CLI invocations to avoid overlapping tm.mjs processes",
+        "Captures stderr for HistoryStore audit trail"
+      ]
+    }
+  ],
+  "edges": [
+    { "from": "ui.shell", "to": "svc.session_facade", "contract": "SessionFacade.getSnapshot" },
+    { "from": "ui.shell", "to": "ui.workflow_surface", "contract": "WorkflowSurface.render" },
+    { "from": "ui.shell", "to": "ui.run_configurator", "contract": "RunConfigurator.loadTemplate" },
+    { "from": "ui.shell", "to": "ui.codex_composer", "contract": "CodexComposer.requestAssistance" },
+    { "from": "ui.shell", "to": "ui.history_timeline", "contract": "HistoryTimeline.render" },
+    { "from": "ui.workflow_surface", "to": "svc.run_state_gateway", "contract": "RunStateGateway.subscribeUpdates" },
+    { "from": "ui.run_configurator", "to": "svc.run_configuration", "contract": "RunConfigurationService.prepareManifest" },
+    { "from": "ui.run_configurator", "to": "svc.history_store", "contract": "HistoryStore.loadHistory" },
+    { "from": "ui.codex_composer", "to": "svc.codex_adapter", "contract": "CodexAdapter.generate" },
+    { "from": "ui.history_timeline", "to": "svc.history_store", "contract": "HistoryStore.fetchTimeline" },
+    { "from": "svc.session_facade", "to": "svc.run_state_gateway", "contract": "RunStateGateway.fetchSnapshot" },
+    { "from": "svc.session_facade", "to": "svc.run_configuration", "contract": "RunConfigurationService.persistDefaults" },
+    { "from": "svc.session_facade", "to": "svc.history_store", "contract": "HistoryStore.loadHistory" },
+    { "from": "svc.run_configuration", "to": "svc.cli_bridge", "contract": "CLIBridge.validateManifest" },
+    { "from": "svc.run_configuration", "to": "svc.history_store", "contract": "HistoryStore.appendRun" },
+    { "from": "svc.run_state_gateway", "to": "svc.history_store", "contract": "HistoryStore.loadHistory" },
+    { "from": "svc.codex_adapter", "to": "svc.history_store", "contract": "HistoryStore.appendRun" },
+    { "from": "svc.cli_bridge", "to": "svc.run_state_gateway", "contract": "RunStateGateway.fetchSnapshot" }
+  ],
+  "schemas_ref": "schemas.json"
+}

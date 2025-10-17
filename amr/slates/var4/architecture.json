@@ -1,0 +1,250 @@
+{
+  "modules": [
+    {
+      "id": "ui.console_shell",
+      "purpose": "Own the Bo4-A operator console layout, coordinate workflow, configuration, and Codex panes",
+      "interfaces": [
+        {
+          "name": "ConsoleShell.initialize",
+          "input": { "$ref": "schema.UserSession" },
+          "output": { "$ref": "schema.ConsoleState" },
+          "errors": ["E_UNAUTHORIZED", "E_STATE_STALE"],
+          "pre": ["session.role in ['operator','observer']"],
+          "post": ["result.activeRunContext != null"]
+        },
+        {
+          "name": "ConsoleShell.selectRun",
+          "input": { "$ref": "schema.RunSelector" },
+          "output": { "$ref": "schema.WorkflowSnapshot" },
+          "errors": ["E_RUN_NOT_FOUND", "E_ACCESS_DENIED"],
+          "pre": ["selector.runId != ''"],
+          "post": ["snapshot.runId == selector.runId"]
+        }
+      ],
+      "invariants": [
+        "Active run context refreshes workflow snapshot within 2s of upstream change",
+        "Only operators can trigger kickoff transitions"
+      ]
+    },
+    {
+      "id": "ui.workflow_surface",
+      "purpose": "Render AMR → Bo4 swimlanes, stage dependencies, and artifact cards with live status",
+      "interfaces": [
+        {
+          "name": "WorkflowSurface.render",
+          "input": { "$ref": "schema.WorkflowSnapshot" },
+          "output": { "$ref": "schema.RenderResult" },
+          "errors": ["E_LAYOUT", "E_DATA_STALE"],
+          "pre": ["snapshot.stages.length >= 3"],
+          "post": ["result.sections >= snapshot.stages.length"]
+        },
+        {
+          "name": "WorkflowSurface.inspectArtifact",
+          "input": { "$ref": "schema.ArtifactRef" },
+          "output": { "$ref": "schema.ArtifactView" },
+          "errors": ["E_ARTIFACT_MISSING", "E_ACCESS_DENIED"],
+          "pre": ["ref.stageId != ''", "ref.artifactId != ''"],
+          "post": ["view.ref.artifactId == ref.artifactId"]
+        }
+      ],
+      "invariants": [
+        "Dependency edges visually render with latency < 200ms after snapshot update",
+        "Artifacts display provenance metadata sourced from RunStateHub"
+      ]
+    },
+    {
+      "id": "ui.run_configurator",
+      "purpose": "Allow operators to configure run parameters, validate inputs, and stage kickoff payloads",
+      "interfaces": [
+        {
+          "name": "RunConfigurator.present",
+          "input": { "$ref": "schema.RunConfigTemplate" },
+          "output": { "$ref": "schema.RunConfigDraft" },
+          "errors": ["E_TEMPLATE_INVALID", "E_VALIDATION"],
+          "pre": ["template.allowedVariants > 0"],
+          "post": ["draft.variantsRequested <= template.allowedVariants"]
+        },
+        {
+          "name": "RunConfigurator.submit",
+          "input": { "$ref": "schema.RunConfigDraft" },
+          "output": { "$ref": "schema.RunConfigCommit" },
+          "errors": ["E_VALIDATION", "E_PERSIST_FAIL"],
+          "pre": ["draft.operatorId != ''"],
+          "post": ["commit.status == 'staged'"]
+        }
+      ],
+      "invariants": [
+        "Kickoff payloads validated against RCM schema before persistence",
+        "Variant count sliders respect template.maxVariants"
+      ]
+    },
+    {
+      "id": "ui.codex_workbench",
+      "purpose": "Embed Codex authoring assistance for briefs, requirements, and slate notes with validation guardrails",
+      "interfaces": [
+        {
+          "name": "CodexWorkbench.compose",
+          "input": { "$ref": "schema.CodexDraftRequest" },
+          "output": { "$ref": "schema.CodexDraftResponse" },
+          "errors": ["E_CODEX_DOWN", "E_CONTENT_POLICY", "E_TIMEOUT"],
+          "pre": ["request.prompt.length > 0"],
+          "post": ["response.draftSegments.length > 0"]
+        },
+        {
+          "name": "CodexWorkbench.validateDraft",
+          "input": { "$ref": "schema.DraftDocument" },
+          "output": { "$ref": "schema.ValidationOutcome" },
+          "errors": ["E_SCHEMA_VIOLATION"],
+          "pre": ["draft.type in ['brief','requirement','slate_note']"],
+          "post": ["outcome.isValid implies draft.metadata.rcmAligned"]
+        }
+      ],
+      "invariants": [
+        "All Codex calls routed through CodexGateway with retry budget <= 2",
+        "Drafts stored locally until operator approval"
+      ]
+    },
+    {
+      "id": "services.run_state_hub",
+      "purpose": "Aggregate live run state from Bo4 orchestrators and expose workflow snapshots",
+      "interfaces": [
+        {
+          "name": "RunStateHub.stream",
+          "input": { "$ref": "schema.RunSelector" },
+          "output": { "$ref": "schema.WorkflowSnapshot" },
+          "errors": ["E_RUN_NOT_FOUND", "E_STATE_STALE"],
+          "pre": ["selector.runId != ''"],
+          "post": ["snapshot.generatedAt <= now"]
+        },
+        {
+          "name": "RunStateHub.publishArtifact",
+          "input": { "$ref": "schema.ArtifactPayload" },
+          "output": { "$ref": "schema.Ack" },
+          "errors": ["E_STATE_REJECTED"],
+          "pre": ["payload.stageId in manifest.stageIds"],
+          "post": ["ack.status == 'accepted'"]
+        }
+      ],
+      "invariants": [
+        "State machine enforces AMR → Bo4 stage ordering",
+        "Snapshots include dependency graph hashes to detect staleness"
+      ]
+    },
+    {
+      "id": "services.config_registry",
+      "purpose": "Persist operator configuration drafts and resolved kickoff payloads",
+      "interfaces": [
+        {
+          "name": "ConfigRegistry.saveDraft",
+          "input": { "$ref": "schema.RunConfigDraft" },
+          "output": { "$ref": "schema.Ack" },
+          "errors": ["E_PERSIST_FAIL"],
+          "pre": ["draft.operatorId != ''"],
+          "post": ["ack.status == 'accepted'"]
+        },
+        {
+          "name": "ConfigRegistry.loadLatest",
+          "input": { "$ref": "schema.RunSelector" },
+          "output": { "$ref": "schema.RunConfigDraft" },
+          "errors": ["E_RUN_NOT_FOUND"],
+          "pre": ["selector.runId != ''"],
+          "post": ["draft.runId == selector.runId"]
+        }
+      ],
+      "invariants": [
+        "Draft versions stamped with immutable checksum",
+        "Kickoff commits require operator MFA token"
+      ]
+    },
+    {
+      "id": "services.history_store",
+      "purpose": "Store and replay past run sessions, including configuration, snapshots, and artifacts",
+      "interfaces": [
+        {
+          "name": "HistoryStore.recordSession",
+          "input": { "$ref": "schema.RunHistoryEntry" },
+          "output": { "$ref": "schema.Ack" },
+          "errors": ["E_PERSIST_FAIL"],
+          "pre": ["entry.runId != ''"],
+          "post": ["ack.status == 'accepted'"]
+        },
+        {
+          "name": "HistoryStore.fetchTimeline",
+          "input": { "$ref": "schema.RunSelector" },
+          "output": { "$ref": "schema.RunHistoryEntry" },
+          "errors": ["E_RUN_NOT_FOUND"],
+          "pre": ["selector.runId != ''"],
+          "post": ["history.runId == selector.runId"]
+        }
+      ],
+      "invariants": [
+        "Session snapshots stored with append-only ledger",
+        "Replay emits the same stage ordering as original run"
+      ]
+    },
+    {
+      "id": "services.codex_gateway",
+      "purpose": "Broker Codex API calls with quota, policy enforcement, and telemetry",
+      "interfaces": [
+        {
+          "name": "CodexGateway.invoke",
+          "input": { "$ref": "schema.CodexDraftRequest" },
+          "output": { "$ref": "schema.CodexDraftResponse" },
+          "errors": ["E_CODEX_DOWN", "E_CONTENT_POLICY", "E_TIMEOUT"],
+          "pre": ["request.promptTokens <= limits.maxTokens"],
+          "post": ["response.usageTokens <= limits.maxTokens"]
+        }
+      ],
+      "invariants": [
+        "All requests logged with runId correlation",
+        "Enforces cooldown between failed attempts"
+      ]
+    },
+    {
+      "id": "integration.cli_bridge",
+      "purpose": "Integrate CLI utilities (tm.mjs, scripts/rcm-ssd-check.mjs) for data hydration and guardrail checks",
+      "interfaces": [
+        {
+          "name": "CliBridge.runPreflightChecks",
+          "input": { "$ref": "schema.RunConfigDraft" },
+          "output": { "$ref": "schema.PreflightReport" },
+          "errors": ["E_CLI_FAILURE"],
+          "pre": ["draft.configValidated"],
+          "post": ["report.status in ['pass','warn','fail']"]
+        },
+        {
+          "name": "CliBridge.exportArtifacts",
+          "input": { "$ref": "schema.ArtifactExportRequest" },
+          "output": { "$ref": "schema.Ack" },
+          "errors": ["E_CLI_FAILURE", "E_EXPORT_DENIED"],
+          "pre": ["request.targetPath != ''"],
+          "post": ["ack.status == 'accepted'"]
+        },
+        {
+          "name": "CLI.status",
+          "input": { "$ref": "schema.RunSelector" },
+          "output": { "$ref": "schema.ValidationOutcome" },
+          "errors": ["E_CLI_FAILURE"],
+          "pre": ["selector.runId != ''"],
+          "post": ["outcome.isValid in [true,false]"]
+        }
+      ],
+      "invariants": [
+        "CLI invocations sandboxed with timeout <= 60s",
+        "Exports respect access control policies"
+      ]
+    }
+  ],
+  "edges": [
+    { "from": "ui.console_shell", "to": "services.run_state_hub", "contract": "RunStateHub.stream" },
+    { "from": "ui.console_shell", "to": "services.history_store", "contract": "HistoryStore.fetchTimeline" },
+    { "from": "ui.workflow_surface", "to": "services.run_state_hub", "contract": "RunStateHub.stream" },
+    { "from": "ui.run_configurator", "to": "services.config_registry", "contract": "ConfigRegistry.saveDraft" },
+    { "from": "ui.run_configurator", "to": "integration.cli_bridge", "contract": "CliBridge.runPreflightChecks" },
+    { "from": "ui.codex_workbench", "to": "services.codex_gateway", "contract": "CodexGateway.invoke" },
+    { "from": "services.run_state_hub", "to": "services.history_store", "contract": "HistoryStore.recordSession" },
+    { "from": "services.config_registry", "to": "services.history_store", "contract": "HistoryStore.recordSession" },
+    { "from": "integration.cli_bridge", "to": "services.history_store", "contract": "HistoryStore.recordSession" }
+  ],
+  "schemas_ref": "schemas.json"
+}

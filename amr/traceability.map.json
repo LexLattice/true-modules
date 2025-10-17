@@ -1,24 +1,70 @@
 {
-  "REQ-1.1": {
+  "REQ-UI-1": {
     "modules": [
-      "reporter"
+      "ui.shell",
+      "ui.workflow_surface",
+      "svc.session_facade",
+      "svc.run_state_gateway"
     ],
     "interfaces": [
-      "Reporter.write"
+      "Shell.load",
+      "WorkflowSurface.render",
+      "SessionFacade.getSnapshot",
+      "RunStateGateway.fetchSnapshot"
     ],
     "tests": [
-      "T-001"
+      "T-UI-01"
     ]
   },
-  "REQ-1.2": {
+  "REQ-UI-2": {
     "modules": [
-      "cli"
+      "ui.run_configurator",
+      "svc.run_configuration",
+      "svc.session_facade",
+      "svc.cli_bridge",
+      "svc.history_store"
     ],
     "interfaces": [
-      "CLI.parse"
+      "RunConfigurator.submit",
+      "RunConfigurationService.prepareManifest",
+      "SessionFacade.saveConfig",
+      "CLIBridge.validateManifest",
+      "HistoryStore.appendRun"
     ],
     "tests": [
-      "T-010"
+      "T-UI-02"
+    ]
+  },
+  "REQ-UI-3": {
+    "modules": [
+      "ui.codex_composer",
+      "svc.codex_adapter",
+      "svc.history_store"
+    ],
+    "interfaces": [
+      "CodexComposer.requestAssistance",
+      "CodexAdapter.generate",
+      "CodexAdapter.redact",
+      "HistoryStore.appendRun"
+    ],
+    "tests": [
+      "T-UI-03"
+    ]
+  },
+  "REQ-UI-4": {
+    "modules": [
+      "ui.history_timeline",
+      "svc.history_store",
+      "svc.session_facade"
+    ],
+    "interfaces": [
+      "HistoryTimeline.render",
+      "HistoryTimeline.replay",
+      "HistoryStore.loadHistory",
+      "SessionFacade.listHistory"
+    ],
+    "tests": [
+      "T-UI-04"
     ]
   }
 }

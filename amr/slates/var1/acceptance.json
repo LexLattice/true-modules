@@ -1,16 +1,39 @@
 {
-  "T-001": {
-    "req": "REQ-1.1",
-    "oracle": "report.json",
+  "T-UI-01": {
+    "req": "REQ-UI-1",
+    "oracle": "visual/workflow-swimlanes.png",
     "steps": [
-      { "action": "run_cli", "args": ["--export", "report.json"], "assert": "file_exists:report.json" }
+      { "action": "seed_run_state", "args": { "runId": "bo4-demo-001", "stages": ["amr_sync", "briefing", "review", "bo4_commit"] } },
+      { "action": "open_console", "args": { "user": "operator-amy" }, "assert": "workflow_surface.stageCount == 4" },
+      { "action": "wait_for_update", "args": { "runId": "bo4-demo-001", "stage": "briefing", "status": "running" }, "assert": "stage('briefing').dependencies == ['amr_sync']" }
     ]
   },
-  "T-010": {
-    "req": "REQ-1.2",
-    "oracle": "console",
+  "T-UI-02": {
+    "req": "REQ-UI-2",
+    "oracle": "logs/config-submit.json",
     "steps": [
-      { "action": "run_cli", "args": ["--dry-run"], "assert": "stdout_contains:DRY_RUN" }
+      { "action": "load_configurator", "args": { "templateVersion": "2025.03" }, "assert": "fields.variantCount.min == 1" },
+      { "action": "set_config_field", "args": { "field": "variantCount", "value": 3 } },
+      { "action": "set_config_field", "args": { "field": "followUpPolicy", "value": "auto" } },
+      { "action": "submit_configuration", "assert": "submission.valid == true && submission.manifestRef != null" }
+    ]
+  },
+  "T-UI-03": {
+    "req": "REQ-UI-3",
+    "oracle": "captures/codex-inline.md",
+    "steps": [
+      { "action": "open_codex_panel", "args": { "channel": "briefs" }, "assert": "composer.isVisible == true" },
+      { "action": "request_codex_assistance", "args": { "intent": "draft_brief", "contextTokens": 1200 }, "assert": "suggestions.count >= 1" },
+      { "action": "accept_suggestion", "args": { "suggestionId": "sg-001" }, "assert": "draft.persisted == true" }
+    ]
+  },
+  "T-UI-04": {
+    "req": "REQ-UI-4",
+    "oracle": "db/run-history.json",
+    "steps": [
+      { "action": "complete_run", "args": { "runId": "bo4-demo-042" }, "assert": "history_store.appendRun.saved == true" },
+      { "action": "open_history_tab", "args": { "user": "operator-amy" }, "assert": "history.items.filter(r => r.runId=='bo4-demo-042').length == 1" },
+      { "action": "replay_run", "args": { "runId": "bo4-demo-042" }, "assert": "configurator.prefill.manifest.runId == 'bo4-demo-042'" }
     ]
   }
 }

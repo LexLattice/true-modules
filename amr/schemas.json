@@ -153,6 +153,29 @@
         "notes": { "type": "string" }
       }
     },
+    "ArtifactRef": {
+      "$id": "schema.ArtifactRef",
+      "type": "object",
+      "required": ["runId", "stageId", "artifactId"],
+      "properties": {
+        "runId": { "type": "string" },
+        "stageId": { "type": "string" },
+        "artifactId": { "type": "string" }
+      }
+    },
+    "ArtifactView": {
+      "$id": "schema.ArtifactView",
+      "type": "object",
+      "required": ["ref", "state"],
+      "properties": {
+        "ref": { "$ref": "schema.ArtifactRef" },
+        "state": { "type": "string", "enum": ["pending", "ready", "published", "failed"] },
+        "uri": { "type": "string" },
+        "owner": { "type": "string" },
+        "size": { "type": "number" },
+        "checksum": { "type": "string" }
+      }
+    },
     "ConfigTemplate": {
       "$id": "schema.ConfigTemplate",
       "type": "object",
@@ -366,6 +389,23 @@
         }
       }
     },
+    "SessionContext": {
+      "$id": "schema.SessionContext",
+      "type": "object",
+      "required": ["userId", "roles"],
+      "properties": {
+        "userId": { "type": "string" },
+        "roles": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "team": { "type": "string" },
+        "permissions": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
     "WorkflowSnapshotStream": {
       "$id": "schema.WorkflowSnapshotStream",
       "type": "object",
@@ -472,6 +512,39 @@
           "type": "array",
           "items": { "$ref": "schema.HistorySummary" }
         }
+      }
+    },
+    "HistoryView": {
+      "$id": "schema.HistoryView",
+      "type": "object",
+      "required": ["entries", "replayMode"],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": { "$ref": "schema.HistorySummary" }
+        },
+        "selectedRunId": { "type": "string" },
+        "replayMode": { "type": "string", "enum": ["off", "replay"] }
+      }
+    },
+    "HistoryReplayRequest": {
+      "$id": "schema.HistoryReplayRequest",
+      "type": "object",
+      "required": ["runId", "mode"],
+      "properties": {
+        "runId": { "type": "string" },
+        "mode": { "type": "string", "enum": ["replay", "export"] },
+        "operatorId": { "type": "string" }
+      }
+    },
+    "ReplayAck": {
+      "$id": "schema.ReplayAck",
+      "type": "object",
+      "required": ["runId", "started"],
+      "properties": {
+        "runId": { "type": "string" },
+        "started": { "type": "boolean" },
+        "mode": { "type": "string", "enum": ["replay", "export"] }
       }
     },
     "ValidationIssue": {
