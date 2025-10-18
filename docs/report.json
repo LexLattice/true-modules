@@ -1,72 +1,131 @@
 {
-  "summary": "Added an events summary command that materializes JSON/markdown dashboards and wired a main-branch workflow to mine lessons automatically.",
+  "summary": "Sharpened the workflow console wiring: added a shared bootstrap seed, restored live artifact inspection, tightened error messaging, and replaced Playwright with a Vitest-powered DOM harness while documenting the new scripts and dependency trims.",
   "checklist": [
     {
       "id": "P1",
       "status": "implemented",
-      "notes": "Introduced tm events summary plus automation to publish summary artifacts and lessons.json."
+      "notes": "Upgraded service errors, artifact handling, dependency setup, and acceptance coverage to close the remaining console gaps."
     }
   ],
   "architecture": {
-    "components_added": [],
-    "components_modified": [],
-    "data_flow": "tm events summary reads NDJSON telemetry, writes deterministic artifacts/summary.* files, and the lessons workflow reruns gates before mining lessons.json for downstream prompts.",
-    "state_management": "Event aggregates persist as summary.json/summary.md while lessons-auto.sh rewrites lessons.json in the repo root; no long-lived in-memory state added.",
+    "components_added": [
+      {
+        "name": "console bootstrap seed",
+        "path": "apps/workflow-console/src/bootstrap.ts",
+        "role": "workflow"
+      },
+      {
+        "name": "vitest configuration",
+        "path": "apps/workflow-console/vitest.config.ts",
+        "role": "infra"
+      },
+      {
+        "name": "DOM acceptance harness",
+        "path": "apps/workflow-console/tests/acceptance/ui-console.spec.tsx",
+        "role": "workflow"
+      }
+    ],
+    "components_modified": [
+      {
+        "path": "apps/workflow-console/src/main.tsx",
+        "reason": "Use the shared bootstrap helper so the entrypoint only mounts the shell."
+      },
+      {
+        "path": "apps/workflow-console/src/services/cli-bridge.ts",
+        "reason": "Describe kickoff conflicts with the manifest runId."
+      },
+      {
+        "path": "apps/workflow-console/src/services/codex-adapter.ts",
+        "reason": "Include the rejected prompt intent in guardrail errors."
+      },
+      {
+        "path": "apps/workflow-console/src/services/history-store.ts",
+        "reason": "Add contextual runId/userId details to thrown errors."
+      },
+      {
+        "path": "apps/workflow-console/src/ui/workflow-surface.tsx",
+        "reason": "Resolve live snapshot artifacts before falling back to history."
+      },
+      {
+        "path": "apps/workflow-console/vite.config.ts",
+        "reason": "Drop @vitejs/plugin-react in favor of automatic JSX settings."
+      },
+      {
+        "path": "apps/workflow-console/package.json",
+        "reason": "Trim scoped dev dependencies and expose vitest scripts."
+      },
+      {
+        "path": "docs/ui-console.md",
+        "reason": "Document the updated build, lint, and test commands."
+      }
+    ],
+    "data_flow": "bootstrapConsole now seeds RunStateGateway and HistoryStore before the shell mounts, and WorkflowSurface inspects live stage artifacts first while telemetry continues to emit CLI, Codex, and replay events via TelemetryHub.",
+    "state_management": "RunStateGateway maintains the active snapshot, HistoryStore still persists runs/defaults/audits with richer errors, and the UI keeps artifact state locally while consulting live snapshots prior to history lookups.",
     "invariants": [
-      "events summary always writes artifacts/summary.json and artifacts/summary.md for the provided NDJSON",
-      "lessons-auto.sh exits cleanly when no lesson changes are detected"
+      "Kickoff is blocked until manifests set readyForLaunch=true.",
+      "Live artifact inspection must succeed even before history persistence.",
+      "Telemetry events remain exposed through window.__tmTelemetry."
     ],
     "tradeoffs": [
-      "Re-running shipping gates in lessons.yml increases CI time but guarantees fresh events for summaries."
+      "Manual Vitest DOM harness replaces browser automation, so replay/export flows aren't exercised in a real browser.",
+      "Removing @vitejs/plugin-react avoids blocked scopes but forgoes React fast refresh niceties."
     ],
     "alternatives_considered": [
       {
-        "option": "Reuse artifacts from the ci workflow",
-        "rejected_because": "Cross-workflow artifact sharing would require extra API plumbing and secrets."
+        "option": "Keep the Playwright acceptance suite",
+        "rejected_because": "Registry access to scoped packages is denied, preventing npm install from completing."
       }
     ],
     "open_questions": [
-      "Should we enable commit mode in lessons-auto.sh once the bot account is ready?"
+      "Should the Playwright-based suite return once scoped packages become installable again?"
     ]
   },
   "tests": {
-    "added": [],
-    "how_to_run": "node tm.mjs events summary --in runs/2025-10-13-demo-headless/artifacts/events.ndjson --top 3"
+    "added": [
+      "apps/workflow-console/tests/acceptance/ui-console.spec.tsx"
+    ],
+    "how_to_run": "npm run test --workspace apps/workflow-console"
   },
   "metrics": {
-    "files_changed": 6,
-    "insertions": 568,
-    "deletions": 0
+    "files_changed": 16,
+    "insertions": 583,
+    "deletions": 350
   },
   "decisions": [
     {
-      "option": "Publish lessons.json as an artifact instead of committing",
-      "rationale": "Keeps the workflow read-only until automated commit credentials are provisioned.",
+      "option": "Adopt a Vitest DOM harness for acceptance coverage",
+      "rationale": "Provides deterministic coverage without relying on the blocked @playwright/test package while still exercising seeded console workflows.",
       "rejected_alternatives": [
         {
-          "variant": "Auto-commit lessons.json on every main push",
-          "reason": "Requires git credentials in CI and could create merge churn without governance.",
-          "confidence": 0.6
+          "variant": "Retain Playwright with skipped specs",
+          "reason": "Would leave T-UI scenarios unverified and npm install would continue to fail.",
+          "confidence": 0.3
         }
       ]
     }
   ],
   "risks": [
-    "Gates execution inside lessons.yml could fail, blocking artifact publication."
+    "Manual DOM harness may miss browser-only regressions."
   ],
   "residual_risks": [
-    "If gates flake the workflow will not upload fresh summaries despite existing lessons data."
+    "package-lock.json still needs regeneration once the registry ban is lifted."
   ],
   "followups": [
     {
-      "title": "Enable commit mode once bot credentials exist",
-      "priority": "P2",
+      "title": "Regenerate package-lock with full dependencies when registry access is restored",
+      "priority": "P1",
       "owner": "platform",
-      "pointer": "scripts/lessons-auto.sh#L1"
+      "pointer": "package.json"
+    },
+    {
+      "title": "Reintroduce Playwright coverage after dependency mirror access returns",
+      "priority": "P2",
+      "owner": "qa",
+      "pointer": "apps/workflow-console/tests/acceptance/ui-console.spec.tsx"
     }
   ],
   "todos": [
-    "Add unit coverage for summarizeEvents to guard against schema changes."
+    "Restore @vitejs/plugin-react once dependency installs are permitted to regain fast refresh."
   ],
-  "confidence": 0.6
+  "confidence": 0.4
 }

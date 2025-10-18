@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Ports, specs, composer and scaffolds for True Modules.",
+  "workspaces": [
+    "apps/workflow-console"
+  ],
   "bin": {
     "tm": "./tm.mjs"
   },
