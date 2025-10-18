@@ -31,6 +31,14 @@ export class HistoryStore {
   }> = [];
   private historyEmitter = createEmitter<void>();
 
+  safeAppend(record: RunHistoryRecord): HistoryReceipt {
+    const existing = this.runs.find((item) => item.runId === record.runId);
+    if (existing) {
+      return { saved: false, runId: existing.runId };
+    }
+    return this.appendRun(record);
+  }
+
   constructor(
     private runStateGateway: RunStateGateway,
     private telemetry: TelemetryHub,

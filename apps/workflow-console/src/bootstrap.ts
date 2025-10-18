@@ -153,7 +153,7 @@ export function bootstrapConsole(services: ConsoleServices) {
   services.runState.simulateProgression(progression, 3000);
 
   const manifest = services.config.prepareManifest(submission, 'run-history-001');
-  services.history.appendRun({
+  services.history.safeAppend({
     runId: manifest.runId,
     manifest,
     completedAt: new Date(Date.now() - 86_400_000).toISOString(),
@@ -181,7 +181,7 @@ export function bootstrapConsole(services: ConsoleServices) {
     { ...submission, variantCount: 2 },
     'run-history-002',
   );
-  services.history.appendRun({
+  services.history.safeAppend({
     runId: manifestTwo.runId,
     manifest: manifestTwo,
     completedAt: new Date(Date.now() - 43_200_000).toISOString(),

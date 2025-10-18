@@ -97,7 +97,7 @@ export interface ConfigTemplateField {
   id: string;
   label: string;
   description?: string;
-  default: string | number | boolean;
+  default: string | number | boolean | string[];
   required?: boolean;
   enum?: string[];
 }
