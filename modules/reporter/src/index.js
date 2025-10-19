@@ -38,8 +38,8 @@ export async function reporterWrite(message, options = {}) {
 
   const alreadyLast = prior.length > 0 && prior[prior.length - 1] === trimmed;
   if (!alreadyLast) {
+    await fs.appendFile(logFile, `${trimmed}\n`, 'utf8');
     prior.push(trimmed);
-    await fs.writeFile(logFile, `${prior.join('\n')}\n`, 'utf8');
   }
 
   return {

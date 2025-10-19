@@ -169,7 +169,7 @@ async function main() {
   }
 
   const lockPath = args.lock;
-  const modulesRoot = args['modules-root'] || args.modulesRoot;
+  const modulesRoot = args['modules-root'];
   const composePath = args.compose;
   if (!lockPath || !modulesRoot) usage();
 

@@ -1,13 +1,32 @@
+import path from 'path';
+import process from 'process';
+
+const SCRIPT_EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
+const NODE_BINARIES = new Set(['node', 'node.exe']);
+
+function isNodeExecutable(value) {
+  if (typeof value !== 'string') return false;
+  if (value === process.execPath) return true;
+  const base = path.basename(value);
+  return NODE_BINARIES.has(base);
+}
+
+function isScriptPath(value) {
+  if (typeof value !== 'string') return false;
+  const ext = path.extname(value);
+  return SCRIPT_EXTENSIONS.has(ext);
+}
+
 export function cliParse(argv) {
   if (!Array.isArray(argv)) {
     throw new TypeError('CLI.parse expects an argv array.');
   }
 
   const tokens = argv.slice();
-  if (tokens.length && tokens[0].includes('node')) {
+  if (tokens.length && isNodeExecutable(tokens[0])) {
     tokens.shift();
   }
-  if (tokens.length && tokens[0].endsWith('.js')) {
+  if (tokens.length && isScriptPath(tokens[0])) {
     tokens.shift();
   }
 
@@ -29,8 +48,8 @@ export function cliParse(argv) {
     result.errors.push(`Unknown command: ${result.command}`);
   }
 
-  for (let i = 0; i < tokens.length; i += 1) {
-    const token = tokens[i];
+  while (tokens.length > 0) {
+    const token = tokens.shift();
     if (token.startsWith('--')) {
       const [rawKey, rawValue] = token.slice(2).split('=', 2);
       if (!rawKey) {
@@ -39,10 +58,9 @@ export function cliParse(argv) {
       }
       let value = rawValue;
       if (value === undefined) {
-        const next = tokens[i + 1];
+        const next = tokens[0];
         if (next && !next.startsWith('-')) {
-          value = next;
-          i += 1;
+          value = tokens.shift();
         } else {
           value = true;
         }

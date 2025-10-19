@@ -67,11 +67,10 @@ async function runCase(spec, moduleRoot) {
       }
       default:
         throw new Error(`Unknown spec case: ${spec.case}`);
-    }
-  } finally {
-    await fs.rm(logDir, { recursive: true, force: true });
-    await fs.rm(path.join(moduleRoot, '.tmp'), { recursive: true, force: true });
   }
+} finally {
+  await fs.rm(logDir, { recursive: true, force: true });
+}
 }
 
 async function main() {
