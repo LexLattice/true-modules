@@ -36,15 +36,16 @@ export async function reporterWrite(message, options = {}) {
     if (err && err.code !== 'ENOENT') throw err;
   }
 
-  const alreadyLast = prior.length > 0 && prior[prior.length - 1] === trimmed;
-  if (!alreadyLast) {
+  const seen = new Set(prior);
+  const alreadyLogged = seen.has(trimmed);
+  if (!alreadyLogged) {
     await fs.appendFile(logFile, `${trimmed}\n`, 'utf8');
     prior.push(trimmed);
   }
 
   return {
     file: logFile,
-    appended: !alreadyLast,
+    appended: !alreadyLogged,
     lines: prior.slice()
   };
 }

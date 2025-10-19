@@ -1,0 +1,26 @@
+{
+  "schema": "tm-implementation-report@1",
+  "run_id": "2025-10-19T02:36:02.881Z",
+  "canon_lock_sha256": "97b94ada2f0f6bb47477259c7d54a75108a71130ba717d108f93af148db56400",
+  "compose_sha256": "1bc197c0266354b6bef03c58b86156bde9674285f969659eeb95f26526d23013",
+  "results": {
+    "reporter": {
+      "interfaces": { "Reporter.write": "pass" },
+      "invariants": { "idempotent(Reporter.write)": "pass" },
+      "acceptance": { "T-001": "pass", "T-002": "pass" }
+    },
+    "cli": {
+      "interfaces": { "CLI.parse": "pass" },
+      "invariants": { "deterministic(CLI.parse)": "pass" },
+      "acceptance": { "T-010": "pass" }
+    }
+  },
+  "evidence": {
+    "events_file": "artifacts/events.ndjson",
+    "port_exports": {
+      "reporter": { "Reporter.write": "modules/reporter/src/index.js#reporterWrite" },
+      "cli": { "CLI.parse": "modules/cli/src/cli.js#cliParse" }
+    }
+  },
+  "notes": []
+}
