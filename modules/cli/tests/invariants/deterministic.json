@@ -1,0 +1,5 @@
+{
+  "name": "deterministic(CLI.parse)",
+  "case": "deterministic",
+  "argv": ["report", "--format", "json", "ping"]
+}

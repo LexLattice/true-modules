@@ -27,6 +27,7 @@ target
 .env
 
 artifacts/
+!artifacts/events.ndjson
 !runs/**/artifacts/
 tmp/
 cloud-prompt-*.md

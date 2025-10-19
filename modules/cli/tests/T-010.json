@@ -1,0 +1,6 @@
+{
+  "name": "T-010 - parses report command with format",
+  "case": "basic",
+  "argv": ["node", "cli.js", "report", "--format=json", "deployment ok"],
+  "message": "deployment ok"
+}

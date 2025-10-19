@@ -102,6 +102,18 @@ cat <<'EOF' > runs/2024-07-01-demo/meta/followup.txt
 EOF
 ```
 
+## Canon failure remediation
+
+When `.codex/selfcheck.sh` or direct `tm gates shipping` runs fail, inspect the first error code in stderr and apply the matching fix before re-running.
+
+- **E_CANON_MISSING_MODULE**: generate the module scaffold with `node tm.mjs module --new <id>` (or create `modules/<id>/` manually), then implement the required files/tests from the canon lock.
+- **E_CANON_MISSING_INTERFACE**: add the missing `"port_exports"` entry in `modules/<id>/module.json` and expose the correct symbol/file.
+- **E_CANON_PORT_MISMATCH**: ensure the exported symbol matches the port contract (TypeScript/JS signature); update both the implementation and `port_exports`.
+- **E_CANON_MISSING_INVARIANT_TEST**: create the JSON spec or script listed in the lock, register it in `module.json/tests`, and wire it into the runner.
+- **E_CANON_MISSING_ACCEPTANCE**: scaffold `T-xxx` acceptance specs under the module’s `tests/` folder and make sure the runner executes them.
+- **E_TSC / E_LINT**: resolve TypeScript or lint diagnostics (missing types, cross-imports) highlighted in the gate output.
+- **Other errors** (`E_REQUIRE_UNSAT`, `E_HOOK`, etc.): follow the message guidance, fix the underlying issue, and rerun the self-check until PASS.
+
 ## References
 
 - `docs/headless-cloud.md` — automation details for watch/harvest/meta/compose/gates.

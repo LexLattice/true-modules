@@ -1,3 +1,12 @@
+## Canon Loop Quick Reference
+
+- System prompt: copy the “Canon instructions excerpt” from `docs/implementation-briefs.md` into Codex Cloud before launching an implementation run.
+- Self-check: `.codex/selfcheck.sh <compose> <canon-lock> <modules-root>` wraps shipping gates plus canon verification and emits `artifacts/events.ndjson`.
+- Reports: after a PASS, duplicate `implementation_report.json.template`, fill the run metadata, and commit it with the new `artifacts/events.ndjson`.
+- MUST block: every C/E/F card now inherits the shared requirements list (ports bound, tests present, selfcheck run, report completed, no failing gates).
+
+---
+
 ## C1 — Add Type-Safe Shipping (TS compile in gates)
 
 **Why:** catch broken types in the winner workspace, not just schema/test issues.

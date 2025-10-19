@@ -1,0 +1,42 @@
+{
+  "schema": "tm-canon-lock@1",
+  "modules": {
+    "reporter": {
+      "ports": {
+        "ReporterPort@1": {
+          "export": {
+            "file": "src/index.js",
+            "symbol": "reporterWrite"
+          }
+        }
+      },
+      "invariants": {
+        "idempotent(Reporter.write)": {
+          "test": "tests/invariants/idempotent.json"
+        }
+      },
+      "acceptance": {
+        "T-001": "tests/T-001.json",
+        "T-002": "tests/T-002.json"
+      }
+    },
+    "cli": {
+      "ports": {
+        "CLIPort@1": {
+          "export": {
+            "file": "src/cli.js",
+            "symbol": "cliParse"
+          }
+        }
+      },
+      "invariants": {
+        "deterministic(CLI.parse)": {
+          "test": "tests/invariants/deterministic.json"
+        }
+      },
+      "acceptance": {
+        "T-010": "tests/T-010.json"
+      }
+    }
+  }
+}

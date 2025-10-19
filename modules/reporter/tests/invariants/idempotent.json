@@ -1,0 +1,5 @@
+{
+  "name": "idempotent(Reporter.write)",
+  "case": "idempotent",
+  "message": "stable"
+}
