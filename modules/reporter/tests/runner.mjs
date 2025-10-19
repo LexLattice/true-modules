@@ -71,7 +71,7 @@ async function runCase(spec, moduleRoot) {
         const contents = await fs.readFile(second.file, 'utf8');
         const lines = contents
           .split(/\r?\n/)
-          .map((line) => line.trim())
+          .map((line) => line.trimEnd())
           .filter((line) => line.length > 0);
         const occurrences = lines.filter((line) => line === spec.message);
         assert.equal(occurrences.length, 1);
