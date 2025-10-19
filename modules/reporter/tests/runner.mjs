@@ -56,13 +56,25 @@ async function runCase(spec, moduleRoot) {
       }
       case 'idempotent': {
         const first = await reporterWrite(spec.message, { logDir });
-        const second = await reporterWrite(spec.message, { logDir });
         assert.equal(first.appended, true);
+
+        if (Array.isArray(spec.interleave)) {
+          for (const entry of spec.interleave) {
+            const res = await reporterWrite(entry, { logDir });
+            assert.equal(res.appended, true);
+          }
+        }
+
+        const second = await reporterWrite(spec.message, { logDir });
         assert.equal(second.appended, false);
+
         const contents = await fs.readFile(second.file, 'utf8');
-        const lines = contents.trim().split(/\r?\n/);
-        assert.equal(lines.length, 1);
-        assert.equal(lines[0], spec.message);
+        const lines = contents
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0);
+        const occurrences = lines.filter((line) => line === spec.message);
+        assert.equal(occurrences.length, 1);
         break;
       }
       default:
