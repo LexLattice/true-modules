@@ -31,5 +31,4 @@ artifacts/
 !runs/**/artifacts/
 tmp/
 cloud-prompt-*.md
-.codex/
 runs/ci-headless/
