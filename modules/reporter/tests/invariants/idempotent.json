@@ -1,0 +1,6 @@
+{
+  "name": "idempotent(Reporter.write)",
+  "case": "idempotent",
+  "message": "stable",
+  "interleave": ["something else"]
+}

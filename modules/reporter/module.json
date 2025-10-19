@@ -1,0 +1,33 @@
+{
+  "id": "reporter",
+  "version": "0.1.0",
+  "summary": "Append-only log writer with idempotent entries for status reports.",
+  "provides": [
+    "ReporterPort@1"
+  ],
+  "requires": [],
+  "inputs": {},
+  "outputs": {},
+  "side_effects": [
+    "FS:write"
+  ],
+  "invariants": [
+    "idempotent(Reporter.write)"
+  ],
+  "tests": [
+    "tests/T-001.json",
+    "tests/T-002.json",
+    "tests/invariants/idempotent.json"
+  ],
+  "port_exports": {
+    "ReporterPort@1": {
+      "file": "src/index.js",
+      "export": "reporterWrite"
+    }
+  },
+  "evidence": [
+    { "kind": "test", "file": "tests/T-001.json" },
+    { "kind": "test", "file": "tests/T-002.json" },
+    { "kind": "test", "file": "tests/invariants/idempotent.json" }
+  ]
+}

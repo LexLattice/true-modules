@@ -27,8 +27,8 @@ target
 .env
 
 artifacts/
+!artifacts/events.ndjson
 !runs/**/artifacts/
 tmp/
 cloud-prompt-*.md
-.codex/
 runs/ci-headless/

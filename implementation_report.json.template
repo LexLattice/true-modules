@@ -1,0 +1,26 @@
+{
+  "schema": "tm-implementation-report@1",
+  "run_id": "<iso8601>",
+  "canon_lock_sha256": "<sha256 of amr/canon.lock.json>",
+  "compose_sha256": "<sha256 of compose.json used by gates>",
+  "results": {
+    "reporter": {
+      "interfaces": { "Reporter.write": "pass" },
+      "invariants": { "idempotent(Reporter.write)": "pass" },
+      "acceptance": { "T-001": "pass", "T-002": "pass" }
+    },
+    "cli": {
+      "interfaces": { "CLI.parse": "pass" },
+      "invariants": { "deterministic(CLI.parse)": "pass" },
+      "acceptance": { "T-010": "pass" }
+    }
+  },
+  "evidence": {
+    "events_file": "artifacts/events.ndjson",
+    "port_exports": {
+      "reporter": { "Reporter.write": "modules/reporter/src/index.js#reporterWrite" },
+      "cli": { "CLI.parse": "modules/cli/src/cli.js#cliParse" }
+    }
+  },
+  "notes": []
+}

@@ -1,0 +1,29 @@
+{
+  "id": "cli",
+  "version": "0.1.0",
+  "summary": "Argument parser for the reporter tool.",
+  "provides": [
+    "CLIPort@1"
+  ],
+  "requires": [],
+  "inputs": {},
+  "outputs": {},
+  "side_effects": [],
+  "invariants": [
+    "deterministic(CLI.parse)"
+  ],
+  "tests": [
+    "tests/T-010.json",
+    "tests/invariants/deterministic.json"
+  ],
+  "port_exports": {
+    "CLIPort@1": {
+      "file": "src/cli.js",
+      "export": "cliParse"
+    }
+  },
+  "evidence": [
+    { "kind": "test", "file": "tests/T-010.json" },
+    { "kind": "test", "file": "tests/invariants/deterministic.json" }
+  ]
+}

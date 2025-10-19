@@ -1,0 +1,5 @@
+{
+  "name": "T-002 - preserves write order",
+  "case": "preserve-order",
+  "messages": ["alpha", "beta"]
+}

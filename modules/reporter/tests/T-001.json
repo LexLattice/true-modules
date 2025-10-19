@@ -1,0 +1,5 @@
+{
+  "name": "T-001 - creates log file on first write",
+  "case": "create-log",
+  "message": "first entry"
+}

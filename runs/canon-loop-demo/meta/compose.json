@@ -1,0 +1,10 @@
+{
+  "run_id": "canon-demo",
+  "modules": [
+    { "id": "reporter", "version": "0.1.0" },
+    { "id": "cli", "version": "0.1.0" }
+  ],
+  "wiring": [],
+  "glue": [],
+  "constraints": ["canon-demo"]
+}

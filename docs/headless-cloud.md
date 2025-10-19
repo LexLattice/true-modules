@@ -156,6 +156,22 @@ The command prints grouped logs for each stage, updates `runs/<slug>/run.json`,
 and leaves variant exports under `.codex-cloud/variants/...` ready for meta
 review or application.
 
+## Canon preflight hook (optional)
+
+If the Codex Cloud environment supports post-run hooks, wire in the canon
+verifier so failed stamps never surface as “ready”:
+
+```bash
+node tm.mjs gates shipping \
+  --compose runs/<slug>/meta/compose.json \
+  --modules-root modules \
+  --canon-lock amr/canon.lock.json \
+  --emit-events --events-out artifacts/events.ndjson --strict-events
+```
+
+The hook exits non-zero on canon or gating violations, keeping headless runs
+blocked until the local self-check loop produces a PASS.
+
 ## References
 
 - Codex Cloud CLI: run `codex cloud --help` for command trees and flags.

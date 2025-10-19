@@ -1,3 +1,70 @@
+# Canon Workflow Guardrails
+
+Codex implementers must run a fixed “Canon loop” while working through these briefs. The loop keeps module manifests, tests, and evidence in sync with the canon lock before Codex Cloud files a patch.
+
+- **Canon sources** live under `amr/`: `architecture.json`, `acceptance.json`, and `traceability.map.json`. The lock file (`amr/canon.lock.json`) enumerates the exact modules, ports, invariants, and acceptance specs that must ship.
+- **Helper script** `.codex/selfcheck.sh` wraps shipping gates (`tm gates shipping ...`) and a canon verifier so missing modules, port bindings, or tests are caught locally. The script emits `artifacts/events.ndjson` on every run.
+- **Implementation report**: after a PASS, copy `implementation_report.json.template` to `implementation_report.json`, fill the placeholders with actual run metadata, and include it with the final patch alongside `artifacts/events.ndjson`.
+- **Canon instructions excerpt**: the snippet below is the system prompt we paste into Codex Cloud for implementation tasks. It encodes the repeat-until-green loop.
+
+```text
+You MUST NOT submit a patch until `.codex/selfcheck.sh` exits 0.
+
+Context
+- Canon references live in: amr/architecture.json, amr/acceptance.json, amr/traceability.map.json.
+- The lock is authoritative: amr/canon.lock.json.
+- Implementation loop: docs/implementation-briefs.md (“Canon loop” section).
+
+Required loop (repeat until PASS)
+1. Implement EXACTLY the Canon modules/interfaces, nothing extra.
+   - For every required interface, add `port_exports` in modules/<id>/module.json:
+     "port_exports": { "<InterfaceName>": { "file": "<path>", "export": "<symbol>" } }
+   - Add the invariant + acceptance specs listed in the lock (T-xxx) using repo conventions.
+2. Run the self-check script locally:
+   - If a spec is missing, scaffold it and rerun.
+3. Verify gates:
+       chmod +x .codex/selfcheck.sh  # once per workspace
+       .codex/selfcheck.sh runs/<slug>/meta/compose.json amr/canon.lock.json modules
+   - Do not fabricate stamp.json; rely on the command output.
+4. After a PASS, fill implementation_report.json exactly like docs/implementation-briefs.md specifies.
+   - Every interface/invariant/acceptance must be “pass” (gates just proved it).
+5. Submit ONLY:
+   - All code/test changes,
+   - implementation_report.json,
+   - artifacts/events.ndjson from the PASS run,
+   - Required module/winner reports (if any).
+6. If gates fail (E_CANON_*, E_TSC, E_LINT, ...), fix the cause, rerun the loop, and stop when the script prints PASS.
+
+Never rename Canon IDs or interfaces, never remove failing tests, never declare PASS without a fresh green run.
+```
+
+MUST:
+- Leave the canon intact: implement only the modules listed in `amr/canon.lock.json`, nothing extra.
+- Bind all canon interfaces via `"port_exports"` in each module’s `module.json`.
+- Add tests for every invariant and acceptance case noted in the lock (T-xxx); keep runner conventions.
+- Run `.codex/selfcheck.sh` and include the resulting `artifacts/events.ndjson` in the submission.
+- Create `implementation_report.json` from the template after a PASS run.
+- Do not submit while any gate fails.
+
+---
+
+## Canon Loop Test — Reporter + CLI Modules (T-001 · T-002 · T-010)
+
+- **Objective**: implement the two starter modules referenced by `amr/canon.lock.json` so we can validate the Canon loop end-to-end.
+- **Key files**: `modules/reporter/module.json`, `modules/reporter/src/index.js`, `modules/reporter/tests/**`; `modules/cli/module.json`, `modules/cli/src/cli.js`, `modules/cli/tests/**`; `implementation_report.json`.
+- **Implementation steps**:
+  1. **Reporter port**: author `reporterWrite(message, options?)` that appends distinct, trimmed log entries to `artifacts/reporter.log` (idempotent on repeated writes). Surface `{ file, appended, lines }`.
+  2. **CLI port**: expose `cliParse(argv)` that normalises argv, recognises `report|status`, parses `--key=value`/`--key value`/short flags, and returns `{ command, options, positionals, errors }`.
+  3. **Modules**: bring both manifests in line with the lock (ports, invariants, tests, evidence). Invariant + acceptance specs live under each module’s `tests/` tree with a shared `tests/runner.mjs`.
+  4. **Tests**: add JSON specs called out in the lock — reporter: `tests/T-001.json` (creates log), `tests/T-002.json` (preserves order), `tests/invariants/idempotent.json`; CLI: `tests/T-010.json` plus `tests/invariants/deterministic.json`.
+  5. **Report**: after a PASS loop, copy `implementation_report.json.template` → `implementation_report.json`, compute lock/compose SHA256, and list `"pass"` for every port/invariant/acceptance.
+- **Acceptance**:
+  - `.codex/selfcheck.sh runs/canon-loop-demo/meta/compose.json amr/canon.lock.json modules` completes with `PASS: Canon stamp verified.` and produces `artifacts/events.ndjson`.
+  - `node tm.mjs gates shipping --compose runs/canon-loop-demo/meta/compose.json --modules-root modules --emit-events --strict-events` matches the selfcheck results (no additional failures).
+  - `implementation_report.json` and `artifacts/events.ndjson` from the PASS run are staged for submission.
+
+---
+
 # Implementation Briefs — Wave 1 (C1–C3)
 
 This implementation layer translates the high-level briefs into concrete work items for Codex Cloud coders. Each card below captures scope, files, acceptance criteria, event expectations, and CI touchpoints. Wave 1 focuses on hardening shipping gates and static analysis.

@@ -25,10 +25,37 @@ export interface SafetyPort {
   isSafe(p: Path): Promise<boolean>;
 }
 
+export interface ReporterWriteOptions {
+  logDir?: Path;
+  fileName?: string;
+}
+
+export interface ReporterWriteResult {
+  file: Path;
+  appended: boolean;
+  lines: string[];
+}
+
+export type ReporterPort = (
+  message: string,
+  options?: ReporterWriteOptions
+) => Promise<ReporterWriteResult>;
+
+export interface CLIParseResult {
+  command: string | null;
+  options: Record<string, unknown>;
+  positionals: string[];
+  errors: string[];
+}
+
+export type CLIPort = (argv: string[]) => CLIParseResult;
+
 // Version fence for Ports@1 (documentation-only constant).
 export const PortsV1 = {
   DiffPort: 1,
   IndexPort: 1,
   WorktreePort: 1,
   SafetyPort: 1,
+  ReporterPort: 1,
+  CLIPort: 1,
 } as const;
